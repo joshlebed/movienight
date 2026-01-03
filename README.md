@@ -44,11 +44,8 @@ After running `make backup`, you'll find markdown reports in `data/reports/`:
 ## Commands
 
 ```bash
-make backup            # Full backup (scrape + scan + generate reports)
-make letterboxd        # Just scrape Letterboxd (cached 24h)
-make letterboxd-force  # Force fresh scrape
-make snapshot          # Just scan local media
-make unwatched         # Just regenerate reports
+make backup        # Full backup (uses 6-month cache)
+make backup-force  # Force fresh Letterboxd scrape
 ```
 
 ## Automation

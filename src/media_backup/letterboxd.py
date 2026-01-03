@@ -27,7 +27,7 @@ from media_backup.config import get_letterboxd_cache_dir, load_config
 from media_backup.ratings import enrich_films_with_ratings
 
 LETTERBOXD_BASE = "https://letterboxd.com"
-CACHE_MAX_AGE_HOURS = 24
+CACHE_MAX_AGE_HOURS = 24 * 30 * 6  # 6 months
 
 
 def get_file_age_hours(path: Path) -> float | None:

@@ -21,10 +21,10 @@ if [ ! -d "$DATA_DIR" ]; then
     exit 1
 fi
 
-# Step 1: Scrape Letterboxd
+# Step 1: Scrape Letterboxd with ratings
 echo ""
 echo "--- Scraping Letterboxd ---"
-uv run letterboxd
+uv run letterboxd --ratings
 
 # Step 2: Scan local media
 echo ""
@@ -46,8 +46,8 @@ if [ ! -d ".git" ]; then
     exit 0
 fi
 
-# Add all trackable files (json and txt)
-git add *.json *.txt 2>/dev/null || true
+# Add all trackable files
+git add cache/*.json reports/*.md 2>/dev/null || true
 
 if git diff --cached --quiet; then
     echo "No changes to commit"
