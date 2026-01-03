@@ -1,46 +1,85 @@
 # Media Library Backup
 
-Automated daily snapshots of movies and TV shows stored on the media server, tracked in git for version history.
+Daily backups of your media library and Letterboxd watch history, version controlled in git.
 
-## Files
+## Features
 
-- `media_list.txt` - Current snapshot of all movies and TV shows (auto-generated)
-- `snapshot.sh` - Script that scans media directories and generates the list
-- `cron_backup.sh` - Wrapper script that runs the snapshot and commits/pushes changes
+- Scrapes watched films from your public Letterboxd profile
+- Scans local media directories for movies and TV shows
+- Computes which films you haven't watched yet (fuzzy matching)
+- Commits and pushes changes daily via cron
 
-## Media Directories
+## Setup
 
-- Movies: `/mnt/vault/movies`
-- TV Shows: `/mnt/vault/tv`
+Requires [uv](https://docs.astral.sh/uv/).
 
-## How It Works
-
-1. `snapshot.sh` lists all directories in the movies and TV folders, sorted alphabetically
-2. `cron_backup.sh` runs the snapshot and commits only if there are changes
-3. A cron job runs `cron_backup.sh` daily at 4 AM
-
-## Cron Job
-
-```
-0 4 * * * /home/joshlebed/code/backup_movie_list/cron_backup.sh >> /home/joshlebed/code/backup_movie_list/cron.log 2>&1
-```
-
-To view the cron job: `crontab -l`
-
-To edit: `crontab -e`
-
-## Manual Usage
-
-Run a snapshot manually:
 ```bash
-./snapshot.sh
+# Install dependencies
+uv sync
+
+# Optional: faster fuzzy matching
+uv sync --extra fuzzy
 ```
 
-Run snapshot and commit/push if changed:
+### Configure
+
 ```bash
-./cron_backup.sh
+# Create data directory and config
+mkdir -p data
+cp config.example.json data/config.json
+# Edit data/config.json with your settings
 ```
 
-## Output Format
+### Set up private data repo
 
-The `media_list.txt` file lists one item per line, sorted alphabetically. This format works well with `git diff` - additions and removals show as clean single-line changes.
+The `data/` directory is gitignored. Initialize it as a separate private repo:
+
+```bash
+cd data
+git init
+git remote add origin git@github.com:you/media-backup-data.git
+```
+
+## Commands
+
+```bash
+uv run letterboxd   # Scrape Letterboxd -> data/films_already_watched.json
+uv run snapshot     # Scan media -> data/media_library.json, data/media_list.txt
+uv run unwatched    # Compare -> data/unwatched.txt
+./cron_backup.sh    # Run all, commit and push data repo
+```
+
+## Cron
+
+```
+0 4 * * * /path/to/backup_movie_list/cron_backup.sh >> /path/to/backup_movie_list/cron.log 2>&1
+```
+
+## Configuration
+
+`data/config.json`:
+
+```json
+{
+  "letterboxd_username": "your_username",
+  "media_directories": {
+    "movies": "/path/to/movies",
+    "tv": "/path/to/tv"
+  }
+}
+```
+
+## File Structure
+
+```
+backup_movie_list/          # Public repo (code)
+├── src/media_backup/       # Python package
+├── config.example.json     # Example config
+├── cron_backup.sh          # Daily backup script
+└── data/                   # Private repo (gitignored)
+    ├── config.json         # Your config
+    ├── films_already_watched.json
+    ├── media_library.json
+    ├── media_list.txt
+    └── unwatched.txt
+```

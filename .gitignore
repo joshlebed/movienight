@@ -1,1 +1,23 @@
+# User data (separate private repo)
+data/
+
+# Logs
 cron.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# uv
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
