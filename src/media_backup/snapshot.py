@@ -14,7 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from media_backup.config import get_data_dir, get_media_directories
+from media_backup.config import get_cache_dir, get_media_directories, get_torrents_directory
+from media_backup.torrent import load_torrents, match_torrent
 
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts"}
 
@@ -283,8 +284,10 @@ def process_media_folder(folder: Path, media_type: str) -> dict | None:
     return entry
 
 
-def scan_directory(base_dir: Path, media_type: str) -> list:
-    """Scan a directory for media folders."""
+def scan_directory(
+    base_dir: Path, media_type: str, torrents: list | None = None
+) -> list:
+    """Scan a directory for media folders and optionally match to torrents."""
     if not base_dir.exists():
         print(f"Warning: Directory not found: {base_dir}", file=sys.stderr)
         return []
@@ -295,6 +298,13 @@ def scan_directory(base_dir: Path, media_type: str) -> list:
             print(f"  Processing: {folder.name}", file=sys.stderr)
             item = process_media_folder(folder, media_type)
             if item:
+                # Match to torrent if available
+                if torrents:
+                    torrent = match_torrent(folder.name, torrents)
+                    if torrent:
+                        item["magnet"] = torrent["magnet"]
+                        item["trackers"] = torrent["trackers"]
+                        item["infohash"] = torrent["infohash"]
                 items.append(item)
 
     return items
@@ -337,19 +347,27 @@ def generate_human_readable(media_list: list) -> str:
 
 def main() -> None:
     """Main entry point."""
-    output_dir = get_data_dir()
+    cache_dir = get_cache_dir()
 
     movies_dir, tv_dir = get_media_directories()
+    torrents_dir = get_torrents_directory()
+
+    # Load torrents if configured
+    torrents = None
+    if torrents_dir:
+        print(f"Loading torrents from: {torrents_dir}", file=sys.stderr)
+        torrents = load_torrents(torrents_dir)
+        print(f"Loaded {len(torrents)} torrent(s)", file=sys.stderr)
 
     print("Scanning media library...", file=sys.stderr)
 
     media_list = []
 
     print(f"\nScanning movies: {movies_dir}", file=sys.stderr)
-    media_list.extend(scan_directory(movies_dir, "movie"))
+    media_list.extend(scan_directory(movies_dir, "movie", torrents))
 
     print(f"\nScanning TV shows: {tv_dir}", file=sys.stderr)
-    media_list.extend(scan_directory(tv_dir, "tv"))
+    media_list.extend(scan_directory(tv_dir, "tv", torrents))
 
     # Sort deterministically
     media_list.sort(
@@ -360,17 +378,11 @@ def main() -> None:
         )
     )
 
-    # Write JSON
-    json_path = output_dir / "media_library.json"
+    # Write JSON to cache
+    json_path = cache_dir / "media_library.json"
     with open(json_path, "w") as f:
         json.dump(media_list, f, indent=2, ensure_ascii=False)
     print(f"\nJSON saved to: {json_path}", file=sys.stderr)
-
-    # Write human-readable list
-    txt_path = output_dir / "media_list.txt"
-    with open(txt_path, "w") as f:
-        f.write(generate_human_readable(media_list))
-    print(f"Human-readable list saved to: {txt_path}", file=sys.stderr)
 
     print(f"\nTotal items: {len(media_list)}", file=sys.stderr)
 

@@ -37,3 +37,38 @@ def get_media_directories() -> tuple[Path, Path]:
     tv_dir = Path(media_dirs.get("tv", "/mnt/vault/tv"))
 
     return movies_dir, tv_dir
+
+
+def get_torrents_directory() -> Path | None:
+    """Get torrents metadata directory from config.
+
+    Returns None if not configured (torrent matching disabled).
+    """
+    config = load_config()
+    media_dirs = config.get("media_directories", {})
+
+    torrents_path = media_dirs.get("torrents")
+    if torrents_path:
+        return Path(torrents_path)
+    return None
+
+
+def get_cache_dir() -> Path:
+    """Get the cache directory for JSON data files."""
+    cache_dir = get_data_dir() / "cache"
+    cache_dir.mkdir(exist_ok=True)
+    return cache_dir
+
+
+def get_letterboxd_cache_dir() -> Path:
+    """Get the letterboxd cache directory."""
+    lb_dir = get_cache_dir() / "letterboxd"
+    lb_dir.mkdir(exist_ok=True)
+    return lb_dir
+
+
+def get_reports_dir() -> Path:
+    """Get the reports directory for generated output files."""
+    reports_dir = get_data_dir() / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    return reports_dir

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Generate per-user and pairwise lists comparing local media against Letterboxd data.
+Generate unified markdown reports comparing local media against Letterboxd data.
 
-Per-user outputs:
-- {user}_watchlist_available.txt: Watchlist films available locally
-- {user}_watchlist_missing.txt: Watchlist films NOT available locally
-- {user}_undiscovered.txt: Local films not watched, not on watchlist
+Per-user output (reports/{user}.md):
+- Watchlist available locally
+- Watchlist not available locally
+- Library unwatched (local films not watched, not on watchlist)
 
-Pairwise outputs (for each pair of users):
-- {user1}_{user2}_shared_watchlist_available.txt: Shared watchlist, available locally
-- {user1}_{user2}_shared_watchlist_missing.txt: Shared watchlist, NOT available locally
+Pairwise output (reports/shared_{user1}_{user2}.md):
+- Shared watchlist available locally
+- Shared watchlist not available locally
 """
 
 from __future__ import annotations
@@ -22,10 +22,16 @@ import sys
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from media_backup.config import get_data_dir, load_config
+from media_backup.config import (
+    get_cache_dir,
+    get_letterboxd_cache_dir,
+    get_reports_dir,
+    load_config,
+)
 
 try:
     from rapidfuzz import fuzz as rapidfuzz
+
     USE_RAPIDFUZZ = True
 except ImportError:
     USE_RAPIDFUZZ = False
@@ -39,15 +45,30 @@ def normalize_title(title: str) -> str:
     t = re.sub(r"\[[^\]]*\]", "", t)
     t = re.sub(r"\([^)]*\)", "", t)
 
-    for suffix in ["directors cut", "director's cut", "remastered", "extended",
-                   "theatrical", "unrated", "special edition"]:
+    for suffix in [
+        "directors cut",
+        "director's cut",
+        "remastered",
+        "extended",
+        "theatrical",
+        "unrated",
+        "special edition",
+    ]:
         t = t.replace(suffix, "")
 
     if t.startswith("the "):
         t = t[4:]
 
-    for roman, digit in [("viii", "8"), ("vii", "7"), ("vi", "6"), ("iv", "4"),
-                         ("iii", "3"), ("ii", "2"), ("v", "5"), ("i", "1")]:
+    for roman, digit in [
+        ("viii", "8"),
+        ("vii", "7"),
+        ("vi", "6"),
+        ("iv", "4"),
+        ("iii", "3"),
+        ("ii", "2"),
+        ("v", "5"),
+        ("i", "1"),
+    ]:
         t = re.sub(rf"\b{roman}\b", digit, t)
 
     for char in ".:'-,!?":
@@ -80,7 +101,10 @@ def films_match(film1: dict, film2: dict) -> bool:
     if y1 is not None and y2 is not None and abs(y1 - y2) > 1:
         return False
 
-    return fuzzy_ratio(n1, n2) >= MATCH_THRESHOLD or token_sort_ratio(n1, n2) >= MATCH_THRESHOLD
+    return (
+        fuzzy_ratio(n1, n2) >= MATCH_THRESHOLD
+        or token_sort_ratio(n1, n2) >= MATCH_THRESHOLD
+    )
 
 
 def find_in_list(film: dict, film_list: list[dict]) -> bool:
@@ -106,39 +130,64 @@ def load_json(path: Path) -> list[dict]:
         return json.load(f)
 
 
-def get_local_movies(data_dir: Path) -> list[dict]:
-    media_path = data_dir / "media_library.json"
+def get_local_movies(cache_dir: Path) -> list[dict]:
+    media_path = cache_dir / "media_library.json"
     media = load_json(media_path)
     return [
-        item for item in media
+        item
+        for item in media
         if item.get("type") == "movie" and not item.get("error") and item.get("title")
     ]
 
 
-def format_film_list(films: list[tuple[int | None, str]], header: str) -> str:
-    lines = [header, "", f"Total: {len(films)} films", ""]
-    for year, title in sorted(films, key=lambda x: (x[0] or 0, x[1].lower())):
+def format_rating(lb_rating: float | None, imdb_rating: float | None) -> str:
+    """Format ratings as a compact string."""
+    lb_str = f"{lb_rating:.1f}" if lb_rating else "-.-"
+    imdb_str = f"{imdb_rating:.1f}" if imdb_rating else "-.-"
+    return f"{lb_str} / {imdb_str}"
+
+
+def format_film_table(
+    films: list[tuple[float | None, float | None, int | None, str]],
+) -> str:
+    """Format films as a markdown table. Each film is (lb_rating, imdb_rating, year, title)."""
+    if not films:
+        return "_No films_\n"
+
+    # Sort by Letterboxd rating (highest first), then IMDb, then title
+    sorted_films = sorted(
+        films,
+        key=lambda x: (-(x[0] or 0), -(x[1] or 0), x[3].lower()),
+    )
+
+    lines = ["| LB | IMDb | Year | Title |", "|---:|-----:|:----:|:------|"]
+    for lb_rating, imdb_rating, year, title in sorted_films:
         year_str = str(year) if year else "????"
-        lines.append(f"({year_str}) {title}")
+        lb_str = f"{lb_rating:.1f}" if lb_rating else "-.-"
+        imdb_str = f"{imdb_rating:.1f}" if imdb_rating else "-.-"
+        lines.append(f"| {lb_str} | {imdb_str} | {year_str} | {title} |")
+
     return "\n".join(lines) + "\n"
 
 
-def process_user(username: str, local_movies: list[dict], data_dir: Path) -> dict:
-    """Generate filtered lists for a single user. Returns user data for pairwise processing."""
+def process_user(
+    username: str, local_movies: list[dict], lb_cache_dir: Path
+) -> tuple[dict, list, list, list]:
+    """Process a single user and return data for report generation."""
     print(f"Processing user: {username}", file=sys.stderr)
 
-    watched = load_json(data_dir / f"{username}_watched.json")
-    watchlist = load_json(data_dir / f"{username}_watchlist.json")
+    watched = load_json(lb_cache_dir / f"{username}_watched.json")
+    watchlist = load_json(lb_cache_dir / f"{username}_watchlist.json")
 
     if not watched and not watchlist:
         print(f"  No data found for {username}, skipping", file=sys.stderr)
-        return {"watched": [], "watchlist": []}
+        return {"watched": [], "watchlist": []}, [], [], []
 
     print(f"  Watched: {len(watched)}, Watchlist: {len(watchlist)}", file=sys.stderr)
 
-    watchlist_available = []
+    watchlist_available = []  # (lb_rating, imdb_rating, year, title)
     watchlist_missing = []
-    undiscovered = []
+    library_unwatched = []
 
     # Process watchlist
     for film in watchlist:
@@ -146,13 +195,18 @@ def process_user(username: str, local_movies: list[dict], data_dir: Path) -> dic
         if is_watched:
             continue  # Skip films already watched
 
+        lb_rating = film.get("letterboxd_rating")
+        imdb_rating = film.get("imdb_rating")
+        year = film.get("year")
+        title = film["title"]
+
         local_match = find_local_match(film, local_movies)
         if local_match:
-            watchlist_available.append((film.get("year"), film["title"]))
+            watchlist_available.append((lb_rating, imdb_rating, year, title))
         else:
-            watchlist_missing.append((film.get("year"), film["title"]))
+            watchlist_missing.append((lb_rating, imdb_rating, year, title))
 
-    # Process local movies for undiscovered
+    # Process local movies for library_unwatched
     for movie in local_movies:
         title = movie["title"]
         year = movie.get("year")
@@ -162,39 +216,73 @@ def process_user(username: str, local_movies: list[dict], data_dir: Path) -> dic
         is_on_watchlist = find_in_list(movie_dict, watchlist)
 
         if not is_watched and not is_on_watchlist:
-            undiscovered.append((year, title))
+            library_unwatched.append((None, None, year, title))
 
-    # Write outputs
-    with open(data_dir / f"{username}_watchlist_available.txt", "w") as f:
-        f.write(format_film_list(watchlist_available, f"# {username}'s Watchlist - Available Locally"))
     print(f"  Watchlist available: {len(watchlist_available)} films", file=sys.stderr)
-
-    with open(data_dir / f"{username}_watchlist_missing.txt", "w") as f:
-        f.write(format_film_list(watchlist_missing, f"# {username}'s Watchlist - Not Available Locally"))
     print(f"  Watchlist missing: {len(watchlist_missing)} films", file=sys.stderr)
+    print(f"  Library unwatched: {len(library_unwatched)} films", file=sys.stderr)
 
-    with open(data_dir / f"{username}_undiscovered.txt", "w") as f:
-        f.write(format_film_list(undiscovered, f"# {username}'s Undiscovered Films"))
-    print(f"  Undiscovered: {len(undiscovered)} films", file=sys.stderr)
+    return (
+        {"watched": watched, "watchlist": watchlist},
+        watchlist_available,
+        watchlist_missing,
+        library_unwatched,
+    )
 
-    return {"watched": watched, "watchlist": watchlist}
+
+def write_user_report(
+    username: str,
+    watchlist_available: list,
+    watchlist_missing: list,
+    library_unwatched: list,
+    reports_dir: Path,
+) -> None:
+    """Write unified markdown report for a user."""
+    lines = [
+        f"# {username}'s Film Report",
+        "",
+        f"## Watchlist - Available Locally ({len(watchlist_available)} films)",
+        "",
+        format_film_table(watchlist_available),
+        "",
+        f"## Watchlist - Not Available ({len(watchlist_missing)} films)",
+        "",
+        format_film_table(watchlist_missing),
+        "",
+        f"## Library Unwatched ({len(library_unwatched)} films)",
+        "",
+        "_Films in your local library that you haven't watched and aren't on your watchlist._",
+        "",
+        format_film_table(library_unwatched),
+    ]
+
+    report_path = reports_dir / f"{username}.md"
+    with open(report_path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"  Report written: {report_path}", file=sys.stderr)
 
 
-def process_pair(user1: str, user2: str, user_data: dict, local_movies: list[dict], data_dir: Path) -> None:
-    """Generate pairwise watchlist intersection outputs."""
+def process_pair(
+    user1: str,
+    user2: str,
+    user_data: dict,
+    local_movies: list[dict],
+    reports_dir: Path,
+) -> None:
+    """Generate pairwise shared watchlist report."""
     print(f"Processing pair: {user1} + {user2}", file=sys.stderr)
 
-    watchlist1 = user_data[user1]["watchlist"]
-    watchlist2 = user_data[user2]["watchlist"]
-    watched1 = user_data[user1]["watched"]
-    watched2 = user_data[user2]["watched"]
+    watchlist1 = user_data[user1]["watched_watchlist"]["watchlist"]
+    watchlist2 = user_data[user2]["watched_watchlist"]["watchlist"]
+    watched1 = user_data[user1]["watched_watchlist"]["watched"]
+    watched2 = user_data[user2]["watched_watchlist"]["watched"]
 
     if not watchlist1 or not watchlist2:
         print(f"  Skipping (missing watchlist data)", file=sys.stderr)
         return
 
     # Find intersection of watchlists
-    shared_available = []
+    shared_available = []  # (lb_rating, imdb_rating, year, title)
     shared_missing = []
 
     for film1 in watchlist1:
@@ -206,39 +294,57 @@ def process_pair(user1: str, user2: str, user_data: dict, local_movies: list[dic
         if find_in_list(film1, watched1) or find_in_list(film1, watched2):
             continue
 
+        lb_rating = film1.get("letterboxd_rating")
+        imdb_rating = film1.get("imdb_rating")
+        year = film1.get("year")
+        title = film1["title"]
+
         local_match = find_local_match(film1, local_movies)
         if local_match:
-            shared_available.append((film1.get("year"), film1["title"]))
+            shared_available.append((lb_rating, imdb_rating, year, title))
         else:
-            shared_missing.append((film1.get("year"), film1["title"]))
+            shared_missing.append((lb_rating, imdb_rating, year, title))
 
     # Sort names for consistent filename
     pair_name = "_".join(sorted([user1, user2]))
 
-    with open(data_dir / f"{pair_name}_shared_watchlist_available.txt", "w") as f:
-        f.write(format_film_list(
-            shared_available,
-            f"# {user1} + {user2} Shared Watchlist - Available Locally"
-        ))
-    print(f"  Shared available: {len(shared_available)} films", file=sys.stderr)
+    # Write unified shared report
+    lines = [
+        f"# {user1} + {user2} Shared Watchlist",
+        "",
+        "_Films both users want to watch (and neither has seen yet)._",
+        "",
+        f"## Available Locally ({len(shared_available)} films)",
+        "",
+        format_film_table(shared_available),
+        "",
+        f"## Not Available ({len(shared_missing)} films)",
+        "",
+        format_film_table(shared_missing),
+    ]
 
-    with open(data_dir / f"{pair_name}_shared_watchlist_missing.txt", "w") as f:
-        f.write(format_film_list(
-            shared_missing,
-            f"# {user1} + {user2} Shared Watchlist - Not Available Locally"
-        ))
+    report_path = reports_dir / f"shared_{pair_name}.md"
+    with open(report_path, "w") as f:
+        f.write("\n".join(lines))
+
+    print(f"  Shared available: {len(shared_available)} films", file=sys.stderr)
     print(f"  Shared missing: {len(shared_missing)} films", file=sys.stderr)
+    print(f"  Report written: {report_path}", file=sys.stderr)
 
 
 def main() -> None:
     config = load_config()
-    data_dir = get_data_dir()
+    cache_dir = get_cache_dir()
+    lb_cache_dir = get_letterboxd_cache_dir()
+    reports_dir = get_reports_dir()
 
     users = config.get("letterboxd_users", [])
     if not users and config.get("letterboxd_username"):
         users = [config["letterboxd_username"]]
 
-    ap = argparse.ArgumentParser(description="Generate per-user and pairwise film lists")
+    ap = argparse.ArgumentParser(
+        description="Generate unified markdown reports for film lists"
+    )
     ap.add_argument("--users", nargs="+", default=users, help="Letterboxd usernames")
     args = ap.parse_args()
 
@@ -246,21 +352,30 @@ def main() -> None:
         print("Error: No users specified")
         raise SystemExit(1)
 
-    local_movies = get_local_movies(data_dir)
+    local_movies = get_local_movies(cache_dir)
     print(f"Local library: {len(local_movies)} movies", file=sys.stderr)
 
     # Process each user
     user_data = {}
     for username in args.users:
-        user_data[username] = process_user(username, local_movies, data_dir)
+        watched_watchlist, available, missing, unwatched = process_user(
+            username, local_movies, lb_cache_dir
+        )
+        user_data[username] = {
+            "watched_watchlist": watched_watchlist,
+            "available": available,
+            "missing": missing,
+            "unwatched": unwatched,
+        }
+        write_user_report(username, available, missing, unwatched, reports_dir)
 
     # Process pairs (if more than one user)
     if len(args.users) > 1:
         print("", file=sys.stderr)
         for user1, user2 in itertools.combinations(args.users, 2):
-            process_pair(user1, user2, user_data, local_movies, data_dir)
+            process_pair(user1, user2, user_data, local_movies, reports_dir)
 
-    print("Done", file=sys.stderr)
+    print("\nDone", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ fuzzy = [
 snapshot = "media_backup.snapshot:main"
 unwatched = "media_backup.unwatched:main"
 letterboxd = "media_backup.letterboxd:main"
+setup-wizard = "media_backup.setup:main"
 
 [build-system]
 requires = ["hatchling"]

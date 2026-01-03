@@ -23,7 +23,8 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
-from media_backup.config import get_data_dir, load_config
+from media_backup.config import get_letterboxd_cache_dir, load_config
+from media_backup.ratings import enrich_films_with_ratings
 
 LETTERBOXD_BASE = "https://letterboxd.com"
 CACHE_MAX_AGE_HOURS = 24
@@ -165,6 +166,7 @@ def scrape_user(
     delay: float,
     force: bool = False,
     max_pages: int | None = None,
+    with_ratings: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """Scrape both watched films and watchlist for a user, with caching."""
     watched_path = data_dir / f"{username}_watched.json"
@@ -181,6 +183,17 @@ def scrape_user(
             watched = json.load(f)
         with open(watchlist_path) as f:
             watchlist = json.load(f)
+
+        # Still enrich with ratings if requested
+        if with_ratings:
+            print(f"  Enriching watched films with ratings...", file=sys.stderr)
+            watched = enrich_films_with_ratings(watched)
+            write_json(watched_path, watched)
+
+            print(f"  Enriching watchlist with ratings...", file=sys.stderr)
+            watchlist = enrich_films_with_ratings(watchlist)
+            write_json(watchlist_path, watchlist)
+
         return watched, watchlist
 
     # Scrape fresh data
@@ -194,6 +207,14 @@ def scrape_user(
     watchlist = scrape_films(session, username, build_watchlist_url, delay, max_pages)
     print(f"  Found {len(watchlist)} watchlist films", file=sys.stderr)
 
+    # Enrich with ratings if requested
+    if with_ratings:
+        print(f"  Enriching watched films with ratings...", file=sys.stderr)
+        watched = enrich_films_with_ratings(watched)
+
+        print(f"  Enriching watchlist with ratings...", file=sys.stderr)
+        watchlist = enrich_films_with_ratings(watchlist)
+
     # Save to cache
     write_json(watched_path, watched)
     write_json(watchlist_path, watchlist)
@@ -203,7 +224,7 @@ def scrape_user(
 
 def main() -> None:
     config = load_config()
-    data_dir = get_data_dir()
+    cache_dir = get_letterboxd_cache_dir()
 
     default_users = config.get("letterboxd_users", [])
     if not default_users and config.get("letterboxd_username"):
@@ -233,6 +254,11 @@ def main() -> None:
         default=None,
         help="Optional cap for pages per list (debugging)",
     )
+    ap.add_argument(
+        "--ratings",
+        action="store_true",
+        help="Fetch Letterboxd and IMDb ratings for all films",
+    )
     args = ap.parse_args()
 
     if not args.users:
@@ -241,7 +267,14 @@ def main() -> None:
 
     for username in args.users:
         print(f"Processing {username}:", file=sys.stderr)
-        scrape_user(username, data_dir, delay=args.delay, force=args.force, max_pages=args.max_pages)
+        scrape_user(
+            username,
+            cache_dir,
+            delay=args.delay,
+            force=args.force,
+            max_pages=args.max_pages,
+            with_ratings=args.ratings,
+        )
 
     print("Done", file=sys.stderr)
 
