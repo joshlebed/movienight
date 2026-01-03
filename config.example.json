@@ -1,5 +1,5 @@
 {
-  "letterboxd_username": "your_username",
+  "letterboxd_users": ["your_username"],
   "media_directories": {
     "movies": "/path/to/movies",
     "tv": "/path/to/tv"

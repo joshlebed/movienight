@@ -1,38 +1,33 @@
 # Media Library Backup
 
-Daily backups of your media library and Letterboxd watch history, version controlled in git.
+Daily backups of your media library and Letterboxd data for multiple users, version controlled in git.
 
 ## Features
 
-- Scrapes watched films from your public Letterboxd profile
+- Scrapes watched films and watchlists from Letterboxd (multi-user)
 - Scans local media directories for movies and TV shows
-- Computes which films you haven't watched yet (fuzzy matching)
-- Commits and pushes changes daily via cron
+- Generates per-user filtered lists:
+  - **Watchlist available**: Films on your watchlist that you already have locally
+  - **Undiscovered**: Local films you haven't watched and aren't on your watchlist
 
 ## Setup
 
 Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# Install dependencies
-uv sync
-
-# Optional: faster fuzzy matching
-uv sync --extra fuzzy
+uv sync                  # install deps
+uv sync --extra fuzzy    # optional: faster matching
 ```
 
 ### Configure
 
 ```bash
-# Create data directory and config
 mkdir -p data
 cp config.example.json data/config.json
-# Edit data/config.json with your settings
+# Edit data/config.json
 ```
 
-### Set up private data repo
-
-The `data/` directory is gitignored. Initialize it as a separate private repo:
+### Private data repo
 
 ```bash
 cd data
@@ -43,16 +38,10 @@ git remote add origin git@github.com:you/media-backup-data.git
 ## Commands
 
 ```bash
-uv run letterboxd   # Scrape Letterboxd -> data/films_already_watched.json
-uv run snapshot     # Scan media -> data/media_library.json, data/media_list.txt
-uv run unwatched    # Compare -> data/unwatched.txt
-./cron_backup.sh    # Run all, commit and push data repo
-```
-
-## Cron
-
-```
-0 4 * * * /path/to/backup_movie_list/cron_backup.sh >> /path/to/backup_movie_list/cron.log 2>&1
+uv run letterboxd   # Scrape Letterboxd for all users
+uv run snapshot     # Scan local media
+uv run unwatched    # Generate per-user filtered lists
+./cron_backup.sh    # Run all + commit/push
 ```
 
 ## Configuration
@@ -61,7 +50,7 @@ uv run unwatched    # Compare -> data/unwatched.txt
 
 ```json
 {
-  "letterboxd_username": "your_username",
+  "letterboxd_users": ["user1", "user2"],
   "media_directories": {
     "movies": "/path/to/movies",
     "tv": "/path/to/tv"
@@ -69,17 +58,20 @@ uv run unwatched    # Compare -> data/unwatched.txt
 }
 ```
 
-## File Structure
+## Output Files
+
+Per-user (in `data/`):
+- `{user}_watched.json` - Films watched on Letterboxd
+- `{user}_watchlist.json` - Letterboxd watchlist
+- `{user}_watchlist_available.txt` - Watchlist films available locally
+- `{user}_undiscovered.txt` - Local films not watched, not on watchlist
+
+Shared:
+- `media_library.json` - Full local media metadata
+- `media_list.txt` - Human-readable local media list
+
+## Cron
 
 ```
-backup_movie_list/          # Public repo (code)
-├── src/media_backup/       # Python package
-├── config.example.json     # Example config
-├── cron_backup.sh          # Daily backup script
-└── data/                   # Private repo (gitignored)
-    ├── config.json         # Your config
-    ├── films_already_watched.json
-    ├── media_library.json
-    ├── media_list.txt
-    └── unwatched.txt
+0 4 * * * /path/to/cron_backup.sh >> /path/to/cron.log 2>&1
 ```
