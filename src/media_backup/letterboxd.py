@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """
 Scrape Letterboxd watched films and watchlists for multiple users.
+Includes 24-hour caching to avoid unnecessary requests.
 
 Usage:
   uv run letterboxd
   uv run letterboxd --users user1 user2
+  uv run letterboxd --force  # ignore cache
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -22,6 +26,24 @@ from bs4 import BeautifulSoup
 from media_backup.config import get_data_dir, load_config
 
 LETTERBOXD_BASE = "https://letterboxd.com"
+CACHE_MAX_AGE_HOURS = 24
+
+
+def get_file_age_hours(path: Path) -> float | None:
+    """Get file age in hours, or None if file doesn't exist."""
+    if not path.exists():
+        return None
+    mtime = datetime.fromtimestamp(path.stat().st_mtime)
+    age = datetime.now() - mtime
+    return age.total_seconds() / 3600
+
+
+def is_cache_valid(path: Path, max_age_hours: float = CACHE_MAX_AGE_HOURS) -> bool:
+    """Check if cached file is still valid."""
+    age = get_file_age_hours(path)
+    if age is None:
+        return False
+    return age < max_age_hours
 
 
 def build_films_url(username: str, page: int) -> str:
@@ -48,7 +70,7 @@ def fetch_html(session: requests.Session, url: str, timeout: int = 30) -> str:
 
 
 def parse_films_from_page(html: str) -> list[dict]:
-    """Parse films from a Letterboxd page (works for both /films/ and /watchlist/)."""
+    """Parse films from a Letterboxd page."""
     soup = BeautifulSoup(html, "html.parser")
     posters = soup.select("div.react-component[data-item-slug]")
 
@@ -130,8 +152,38 @@ def create_session() -> requests.Session:
     return session
 
 
-def scrape_user(username: str, delay: float, max_pages: int | None = None) -> tuple[list[dict], list[dict]]:
-    """Scrape both watched films and watchlist for a user."""
+def write_json(path: Path, data: list[dict]) -> None:
+    """Write data to JSON file."""
+    with open(path, "w") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def scrape_user(
+    username: str,
+    data_dir: Path,
+    delay: float,
+    force: bool = False,
+    max_pages: int | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Scrape both watched films and watchlist for a user, with caching."""
+    watched_path = data_dir / f"{username}_watched.json"
+    watchlist_path = data_dir / f"{username}_watchlist.json"
+
+    # Check cache
+    watched_valid = is_cache_valid(watched_path)
+    watchlist_valid = is_cache_valid(watchlist_path)
+
+    if not force and watched_valid and watchlist_valid:
+        watched_age = get_file_age_hours(watched_path)
+        print(f"  Using cached data ({watched_age:.1f}h old)", file=sys.stderr)
+        with open(watched_path) as f:
+            watched = json.load(f)
+        with open(watchlist_path) as f:
+            watchlist = json.load(f)
+        return watched, watchlist
+
+    # Scrape fresh data
     session = create_session()
 
     print(f"  Scraping watched films...", file=sys.stderr)
@@ -142,21 +194,17 @@ def scrape_user(username: str, delay: float, max_pages: int | None = None) -> tu
     watchlist = scrape_films(session, username, build_watchlist_url, delay, max_pages)
     print(f"  Found {len(watchlist)} watchlist films", file=sys.stderr)
 
+    # Save to cache
+    write_json(watched_path, watched)
+    write_json(watchlist_path, watchlist)
+
     return watched, watchlist
-
-
-def write_json(path: Path, data: list[dict]) -> None:
-    """Write data to JSON file."""
-    with open(path, "w") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.write("\n")
 
 
 def main() -> None:
     config = load_config()
     data_dir = get_data_dir()
 
-    # Support both old single-user and new multi-user config
     default_users = config.get("letterboxd_users", [])
     if not default_users and config.get("letterboxd_username"):
         default_users = [config["letterboxd_username"]]
@@ -175,6 +223,11 @@ def main() -> None:
         help="Delay between page requests (seconds)",
     )
     ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Force refresh, ignoring cache",
+    )
+    ap.add_argument(
         "--max-pages",
         type=int,
         default=None,
@@ -187,17 +240,8 @@ def main() -> None:
         raise SystemExit(1)
 
     for username in args.users:
-        print(f"Scraping Letterboxd for user: {username}", file=sys.stderr)
-
-        watched, watchlist = scrape_user(username, delay=args.delay, max_pages=args.max_pages)
-
-        watched_path = data_dir / f"{username}_watched.json"
-        watchlist_path = data_dir / f"{username}_watchlist.json"
-
-        write_json(watched_path, watched)
-        write_json(watchlist_path, watchlist)
-
-        print(f"  Written: {watched_path.name}, {watchlist_path.name}", file=sys.stderr)
+        print(f"Processing {username}:", file=sys.stderr)
+        scrape_user(username, data_dir, delay=args.delay, force=args.force, max_pages=args.max_pages)
 
     print("Done", file=sys.stderr)
 
