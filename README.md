@@ -10,22 +10,37 @@ Daily backups of your media library and Letterboxd data for multiple users, vers
 - Generates per-user filtered lists
 - Generates pairwise watchlist intersections for movie nights
 
+## Quick Start
+
+```bash
+make setup                 # Install deps + create data/config.json
+# Edit data/config.json with your settings
+make backup                # Run full backup
+```
+
 ## Setup
 
 ```bash
-uv sync                  # install deps
-uv sync --extra fuzzy    # optional: faster matching
+make install               # Install dependencies
+make install-fuzzy         # With faster fuzzy matching
+make setup                 # Create data/ and copy example config
 ```
 
-### Configure
+Edit `data/config.json`:
 
-```bash
-mkdir -p data
-cp config.example.json data/config.json
-# Edit data/config.json
+```json
+{
+  "letterboxd_users": ["user1", "user2"],
+  "media_directories": {
+    "movies": "/path/to/movies",
+    "tv": "/path/to/tv"
+  }
+}
 ```
 
 ### Private data repo
+
+The `data/` directory is gitignored. Initialize it as a separate private repo:
 
 ```bash
 cd data
@@ -36,25 +51,19 @@ git remote add origin git@github.com:you/media-backup-data.git
 ## Commands
 
 ```bash
-uv run letterboxd          # Scrape Letterboxd (uses cache if <24h old)
-uv run letterboxd --force  # Force fresh scrape
-uv run snapshot            # Scan local media
-uv run unwatched           # Generate all filtered lists
-./cron_backup.sh           # Run all + commit/push
+make backup            # Run full backup (letterboxd + snapshot + unwatched)
+make letterboxd        # Scrape Letterboxd (uses 24h cache)
+make letterboxd-force  # Force fresh scrape
+make snapshot          # Scan local media
+make unwatched         # Generate filtered lists
 ```
 
-## Configuration
+Or use `uv run` directly:
 
-`data/config.json`:
-
-```json
-{
-  "letterboxd_users": ["user1", "user2"],
-  "media_directories": {
-    "movies": "/path/to/movies",
-    "tv": "/path/to/tv"
-  }
-}
+```bash
+uv run letterboxd [--force] [--users user1 user2]
+uv run snapshot
+uv run unwatched [--users user1 user2]
 ```
 
 ## Output Files
@@ -87,4 +96,13 @@ uv run unwatched           # Generate all filtered lists
 
 ```
 0 4 * * * /path/to/cron_backup.sh >> /path/to/cron.log 2>&1
+```
+
+## Development
+
+```bash
+make install-dev       # Install dev dependencies
+make lint              # Run linter
+make format            # Format code
+make clean             # Remove cache files
 ```
