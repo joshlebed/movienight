@@ -1,46 +1,107 @@
 # Media Library Backup
 
-Daily backups of your media library and Letterboxd data for multiple users, version controlled in git.
+Track your Letterboxd watchlist against your local media library. Find out what's ready to watch, what you need to download, and discover films you already have but haven't seen.
 
-## Features
+## Prerequisites
 
-- Scrapes watched films and watchlists from Letterboxd (multi-user)
-- 24-hour caching to avoid unnecessary requests
-- Scans local media directories for movies and TV shows
-- Generates per-user filtered lists
-- Generates pairwise watchlist intersections for movie nights
+- [uv](https://docs.astral.sh/uv/) - Python package manager
+- git
+- A [Letterboxd](https://letterboxd.com) account
 
 ## Quick Start
 
 ```bash
-make setup                 # Install deps + create data/config.json
-# Edit data/config.json with your settings
-make backup                # Run full backup
+git clone https://github.com/you/backup_movie_list.git
+cd backup_movie_list
+make setup      # Interactive wizard
+make backup     # Run first backup
 ```
 
-## Setup
+The setup wizard will:
+1. Ask for your Letterboxd username(s)
+2. Configure paths to your local media
+3. Optionally set up a private git repo to version your backups
+
+## Restoring on a New Machine
+
+If you already have a backup repo from a previous setup:
 
 ```bash
-make install               # Install dependencies
-make install-fuzzy         # With faster fuzzy matching
-make setup                 # Create data/ and copy example config
+git clone https://github.com/you/backup_movie_list.git
+cd backup_movie_list
+make setup      # Choose "Restore from existing backup repo"
 ```
 
-Edit `data/config.json`:
+## What You Get
+
+After running `make backup`, you'll find markdown reports in `data/reports/`:
+
+| Report | What it shows |
+|--------|---------------|
+| `{user}.md` | Your watchlist (available + missing), plus unwatched films in your library |
+| `shared_{user1}_{user2}.md` | Films both users want to watch (great for movie night) |
+
+## Commands
+
+```bash
+make backup            # Full backup (scrape + scan + generate reports)
+make letterboxd        # Just scrape Letterboxd (cached 24h)
+make letterboxd-force  # Force fresh scrape
+make snapshot          # Just scan local media
+make unwatched         # Just regenerate reports
+```
+
+## Automation
+
+Run daily via cron:
+
+```
+0 4 * * * /path/to/cron_backup.sh >> /path/to/cron.log 2>&1
+```
+
+## Advanced
+
+<details>
+<summary>Manual configuration</summary>
+
+Edit `data/config.json` directly:
 
 ```json
 {
   "letterboxd_users": ["user1", "user2"],
   "media_directories": {
     "movies": "/path/to/movies",
-    "tv": "/path/to/tv"
+    "tv": "/path/to/tv",
+    "torrents": "/path/to/torrent/metadata"
   }
 }
 ```
 
-### Private data repo
+The `torrents` directory is optional - if set, generates magnet links from `.torrent` files.
 
-The `data/` directory is gitignored. Initialize it as a separate private repo:
+</details>
+
+<details>
+<summary>Data directory structure</summary>
+
+```
+data/
+├── config.json              # Your settings
+├── cache/                   # Scraped data (auto-generated)
+│   ├── letterboxd/          # Watched + watchlist JSON per user
+│   ├── media_library.json   # Local media scan
+│   └── ratings_cache.json   # Film ratings
+└── reports/                 # Human-readable output
+    ├── {user}.md
+    └── shared_{user1}_{user2}.md
+```
+
+</details>
+
+<details>
+<summary>Private backup repo</summary>
+
+The `data/` directory is gitignored. The setup wizard can configure it as a separate private repo, or do it manually:
 
 ```bash
 cd data
@@ -48,61 +109,15 @@ git init
 git remote add origin git@github.com:you/media-backup-data.git
 ```
 
-## Commands
+</details>
+
+<details>
+<summary>Development</summary>
 
 ```bash
-make backup            # Run full backup (letterboxd + snapshot + unwatched)
-make letterboxd        # Scrape Letterboxd (uses 24h cache)
-make letterboxd-force  # Force fresh scrape
-make snapshot          # Scan local media
-make unwatched         # Generate filtered lists
+make install-dev    # Install dev tools
+make lint           # Run linter
+make format         # Format code
 ```
 
-Or use `uv run` directly:
-
-```bash
-uv run letterboxd [--force] [--users user1 user2]
-uv run snapshot
-uv run unwatched [--users user1 user2]
-```
-
-## Output Files
-
-### Per-user
-
-| File | Description |
-|------|-------------|
-| `{user}_watched.json` | Films watched on Letterboxd |
-| `{user}_watchlist.json` | Letterboxd watchlist |
-| `{user}_watchlist_available.txt` | Watchlist films available locally |
-| `{user}_watchlist_missing.txt` | Watchlist films NOT available locally |
-| `{user}_undiscovered.txt` | Local films not watched, not on watchlist |
-
-### Pairwise (for each pair of users)
-
-| File | Description |
-|------|-------------|
-| `{user1}_{user2}_shared_watchlist_available.txt` | Shared watchlist, available locally |
-| `{user1}_{user2}_shared_watchlist_missing.txt` | Shared watchlist, NOT available locally |
-
-### Shared
-
-| File | Description |
-|------|-------------|
-| `media_library.json` | Full local media metadata |
-| `media_list.txt` | Human-readable local media list |
-
-## Cron
-
-```
-0 4 * * * /path/to/cron_backup.sh >> /path/to/cron.log 2>&1
-```
-
-## Development
-
-```bash
-make install-dev       # Install dev dependencies
-make lint              # Run linter
-make format            # Format code
-make clean             # Remove cache files
-```
+</details>
