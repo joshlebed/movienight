@@ -13,11 +13,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -186,11 +185,11 @@ def scrape_user(
 
         # Still enrich with ratings if requested
         if with_ratings:
-            print(f"  Enriching watched films with ratings...", file=sys.stderr)
+            print("  Enriching watched films with ratings...", file=sys.stderr)
             watched = enrich_films_with_ratings(watched)
             write_json(watched_path, watched)
 
-            print(f"  Enriching watchlist with ratings...", file=sys.stderr)
+            print("  Enriching watchlist with ratings...", file=sys.stderr)
             watchlist = enrich_films_with_ratings(watchlist)
             write_json(watchlist_path, watchlist)
 
@@ -199,20 +198,20 @@ def scrape_user(
     # Scrape fresh data
     session = create_session()
 
-    print(f"  Scraping watched films...", file=sys.stderr)
+    print("  Scraping watched films...", file=sys.stderr)
     watched = scrape_films(session, username, build_films_url, delay, max_pages)
     print(f"  Found {len(watched)} watched films", file=sys.stderr)
 
-    print(f"  Scraping watchlist...", file=sys.stderr)
+    print("  Scraping watchlist...", file=sys.stderr)
     watchlist = scrape_films(session, username, build_watchlist_url, delay, max_pages)
     print(f"  Found {len(watchlist)} watchlist films", file=sys.stderr)
 
     # Enrich with ratings if requested
     if with_ratings:
-        print(f"  Enriching watched films with ratings...", file=sys.stderr)
+        print("  Enriching watched films with ratings...", file=sys.stderr)
         watched = enrich_films_with_ratings(watched)
 
-        print(f"  Enriching watchlist with ratings...", file=sys.stderr)
+        print("  Enriching watchlist with ratings...", file=sys.stderr)
         watchlist = enrich_films_with_ratings(watchlist)
 
     # Save to cache

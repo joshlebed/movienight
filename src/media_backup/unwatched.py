@@ -148,24 +148,29 @@ def format_rating(lb_rating: float | None, imdb_rating: float | None) -> str:
 
 
 def format_film_table(
-    films: list[tuple[float | None, float | None, int | None, str]],
+    films: list[tuple[float | None, float | None, int | None, int | None, int | None, str]],
 ) -> str:
-    """Format films as a markdown table. Each film is (lb_rating, imdb_rating, year, title)."""
+    """Format films as a markdown table.
+
+    Each film is (lb_rating, imdb_rating, rt_rating, metacritic, year, title).
+    """
     if not films:
         return "_No films_\n"
 
     # Sort by Letterboxd rating (highest first), then IMDb, then title
     sorted_films = sorted(
         films,
-        key=lambda x: (-(x[0] or 0), -(x[1] or 0), x[3].lower()),
+        key=lambda x: (-(x[0] or 0), -(x[1] or 0), x[5].lower()),
     )
 
-    lines = ["| LB | IMDb | Year | Title |", "|---:|-----:|:----:|:------|"]
-    for lb_rating, imdb_rating, year, title in sorted_films:
+    lines = ["| LB | IMDb | RT | MC | Year | Title |", "|---:|-----:|---:|---:|:----:|:------|"]
+    for lb_rating, imdb_rating, rt_rating, metacritic, year, title in sorted_films:
         year_str = str(year) if year else "????"
-        lb_str = f"{lb_rating:.1f}" if lb_rating else "-.-"
-        imdb_str = f"{imdb_rating:.1f}" if imdb_rating else "-.-"
-        lines.append(f"| {lb_str} | {imdb_str} | {year_str} | {title} |")
+        lb_str = f"{lb_rating:.1f}" if lb_rating else "-"
+        imdb_str = f"{imdb_rating:.1f}" if imdb_rating else "-"
+        rt_str = f"{rt_rating}%" if rt_rating else "-"
+        mc_str = str(metacritic) if metacritic else "-"
+        lines.append(f"| {lb_str} | {imdb_str} | {rt_str} | {mc_str} | {year_str} | {title} |")
 
     return "\n".join(lines) + "\n"
 
@@ -185,7 +190,7 @@ def process_user(
 
     print(f"  Watched: {len(watched)}, Watchlist: {len(watchlist)}", file=sys.stderr)
 
-    watchlist_available = []  # (lb_rating, imdb_rating, year, title)
+    watchlist_available = []  # (lb_rating, imdb_rating, rt, mc, year, title)
     watchlist_missing = []
     library_unwatched = []
 
@@ -197,14 +202,16 @@ def process_user(
 
         lb_rating = film.get("letterboxd_rating")
         imdb_rating = film.get("imdb_rating")
+        rt_rating = film.get("rotten_tomatoes")
+        metacritic = film.get("metacritic")
         year = film.get("year")
         title = film["title"]
 
         local_match = find_local_match(film, local_movies)
         if local_match:
-            watchlist_available.append((lb_rating, imdb_rating, year, title))
+            watchlist_available.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
         else:
-            watchlist_missing.append((lb_rating, imdb_rating, year, title))
+            watchlist_missing.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
 
     # Process local movies for library_unwatched
     for movie in local_movies:
@@ -216,7 +223,7 @@ def process_user(
         is_on_watchlist = find_in_list(movie_dict, watchlist)
 
         if not is_watched and not is_on_watchlist:
-            library_unwatched.append((None, None, year, title))
+            library_unwatched.append((None, None, None, None, year, title))
 
     print(f"  Watchlist available: {len(watchlist_available)} films", file=sys.stderr)
     print(f"  Watchlist missing: {len(watchlist_missing)} films", file=sys.stderr)
@@ -278,11 +285,11 @@ def process_pair(
     watched2 = user_data[user2]["watched_watchlist"]["watched"]
 
     if not watchlist1 or not watchlist2:
-        print(f"  Skipping (missing watchlist data)", file=sys.stderr)
+        print("  Skipping (missing watchlist data)", file=sys.stderr)
         return
 
     # Find intersection of watchlists
-    shared_available = []  # (lb_rating, imdb_rating, year, title)
+    shared_available = []  # (lb_rating, imdb_rating, rt, mc, year, title)
     shared_missing = []
 
     for film1 in watchlist1:
@@ -296,14 +303,16 @@ def process_pair(
 
         lb_rating = film1.get("letterboxd_rating")
         imdb_rating = film1.get("imdb_rating")
+        rt_rating = film1.get("rotten_tomatoes")
+        metacritic = film1.get("metacritic")
         year = film1.get("year")
         title = film1["title"]
 
         local_match = find_local_match(film1, local_movies)
         if local_match:
-            shared_available.append((lb_rating, imdb_rating, year, title))
+            shared_available.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
         else:
-            shared_missing.append((lb_rating, imdb_rating, year, title))
+            shared_missing.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
 
     # Sort names for consistent filename
     pair_name = "_".join(sorted([user1, user2]))
