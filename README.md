@@ -1,6 +1,15 @@
-# Media Library Backup
+# MovieNight
 
-Track your Letterboxd watchlist against your local media library. Find out what's ready to watch, what you need to download, and discover films you already have but haven't seen.
+Sync your Letterboxd watchlist with your local media library. See what's ready to watch, what's missing, and find forgotten films you already own.
+
+**What it does:**
+
+- Shows which watchlist films are already in your library
+- Tracks what you still need to download
+- Surfaces unwatched films you've forgotten about
+- Generates shared lists for movie night with friends
+
+**How it works:** Your data lives in a separate `data/` directory that can be its own private git repo—giving you version history, easy restore on new machines, and automated daily backups via cron.
 
 ## Prerequisites
 
@@ -18,6 +27,7 @@ make backup     # Run first backup
 ```
 
 The setup wizard will:
+
 1. Ask for your Letterboxd username(s)
 2. Configure paths to your local media
 3. Optionally set up a private git repo to version your backups
@@ -36,10 +46,10 @@ make setup      # Choose "Restore from existing backup repo"
 
 After running `make backup`, you'll find markdown reports in `data/reports/`:
 
-| Report | What it shows |
-|--------|---------------|
-| `{user}.md` | Your watchlist (available + missing), plus unwatched films in your library |
-| `shared_{user1}_{user2}.md` | Films both users want to watch (great for movie night) |
+| Report                      | What it shows                                                              |
+| --------------------------- | -------------------------------------------------------------------------- |
+| `{user}.md`                 | Your watchlist (available + missing), plus unwatched films in your library |
+| `shared_{user1}_{user2}.md` | Films both users want to watch (great for movie night)                     |
 
 ## Commands
 
