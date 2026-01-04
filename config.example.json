@@ -3,5 +3,6 @@
   "media_directories": {
     "movies": "/path/to/movies",
     "tv": "/path/to/tv"
-  }
+  },
+  "omdb_api_key": ""
 }

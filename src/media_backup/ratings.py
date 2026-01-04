@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Fetch Letterboxd and IMDb ratings for films.
-Results are cached for 6 months to avoid repeated requests.
-Uses concurrent fetching for speed.
+Uses OMDb API if configured (also provides Rotten Tomatoes + Metacritic).
+Falls back to scraping if no API key.
+Results are cached for 6 months.
 """
 
 from __future__ import annotations
@@ -19,12 +20,12 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
-from media_backup.config import get_cache_dir
+from media_backup.config import get_cache_dir, load_config
 
 RATINGS_CACHE_FILE = "ratings_cache.json"
 CACHE_TTL_DAYS = 180  # 6 months
-MAX_WORKERS = 5  # Concurrent requests (be respectful to servers)
-RATE_LIMIT_DELAY = 0.3  # Minimum seconds between requests per domain
+MAX_WORKERS = 5
+RATE_LIMIT_DELAY = 0.3
 
 
 class RateLimiter:
@@ -45,7 +46,6 @@ class RateLimiter:
             self.last_request[domain] = time.time()
 
 
-# Global rate limiter
 rate_limiter = RateLimiter()
 
 
@@ -69,10 +69,9 @@ def save_cache(cache: dict) -> None:
 
 
 def is_cache_entry_valid(entry: dict) -> bool:
-    """Check if cache entry is still valid (not expired)."""
+    """Check if cache entry is still valid."""
     fetched_at = entry.get("fetched_at")
     if not fetched_at:
-        # Old cache entries without timestamp - consider valid but will be refreshed eventually
         return True
     try:
         fetched_date = datetime.fromisoformat(fetched_at)
@@ -100,7 +99,7 @@ def fetch_letterboxd_rating(session: requests.Session, film_url: str) -> float |
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Look for the rating in meta tags first (most reliable)
+        # Look for the rating in meta tags first
         meta_rating = soup.find("meta", {"name": "twitter:data2"})
         if meta_rating:
             content = meta_rating.get("content", "")
@@ -108,23 +107,17 @@ def fetch_letterboxd_rating(session: requests.Session, film_url: str) -> float |
             if match:
                 return float(match.group(1))
 
-        # Fallback: look for rating in the page
-        rating_elem = soup.select_one("a.tooltip.display-rating")
-        if rating_elem:
-            text = rating_elem.get_text(strip=True)
-            try:
-                return float(text)
-            except ValueError:
-                pass
-
-        # Another fallback: check the histogram section
-        rating_elem = soup.select_one("span.average-rating a")
-        if rating_elem:
-            text = rating_elem.get_text(strip=True)
-            try:
-                return float(text)
-            except ValueError:
-                pass
+        # Fallback: rating element
+        for selector in [
+            "a.tooltip.display-rating",
+            "span.average-rating a",
+        ]:
+            elem = soup.select_one(selector)
+            if elem:
+                try:
+                    return float(elem.get_text(strip=True))
+                except ValueError:
+                    pass
 
     except Exception as e:
         print(f"  Error fetching {film_url}: {e}", file=sys.stderr)
@@ -132,12 +125,69 @@ def fetch_letterboxd_rating(session: requests.Session, film_url: str) -> float |
     return None
 
 
-def fetch_imdb_rating(
+def fetch_omdb_ratings(
+    session: requests.Session, title: str, year: int | None, api_key: str
+) -> dict:
+    """Fetch ratings from OMDb API. Returns dict with imdb/rt/metacritic ratings."""
+    result = {
+        "imdb_rating": None,
+        "imdb_id": None,
+        "rotten_tomatoes": None,
+        "metacritic": None,
+    }
+
+    try:
+        params = {"apikey": api_key, "t": title, "type": "movie"}
+        if year:
+            params["y"] = year
+
+        rate_limiter.wait("omdbapi.com")
+        r = session.get("https://www.omdbapi.com/", params=params, timeout=15)
+        if r.status_code != 200:
+            return result
+
+        data = r.json()
+        if data.get("Response") != "True":
+            return result
+
+        # IMDb rating
+        imdb_rating = data.get("imdbRating")
+        if imdb_rating and imdb_rating != "N/A":
+            try:
+                result["imdb_rating"] = float(imdb_rating)
+            except ValueError:
+                pass
+
+        result["imdb_id"] = data.get("imdbID")
+
+        # Parse other ratings
+        for rating in data.get("Ratings", []):
+            source = rating.get("Source", "")
+            value = rating.get("Value", "")
+
+            if source == "Rotten Tomatoes":
+                # "85%" -> 85
+                match = re.match(r"(\d+)%", value)
+                if match:
+                    result["rotten_tomatoes"] = int(match.group(1))
+
+            elif source == "Metacritic":
+                # "75/100" -> 75
+                match = re.match(r"(\d+)/", value)
+                if match:
+                    result["metacritic"] = int(match.group(1))
+
+    except Exception as e:
+        print(f"  OMDb error for '{title}': {e}", file=sys.stderr)
+
+    return result
+
+
+def fetch_imdb_rating_scrape(
     session: requests.Session, title: str, year: int | None
 ) -> tuple[float | None, str | None]:
-    """Fetch IMDb rating by searching for the film. Returns (rating, imdb_id)."""
+    """Fetch IMDb rating by scraping. Returns (rating, imdb_id)."""
     try:
-        # Search IMDb
         query = f"{title} {year}" if year else title
         search_url = (
             f"https://www.imdb.com/find/?q={requests.utils.quote(query)}&s=tt&ttype=ft"
@@ -149,8 +199,6 @@ def fetch_imdb_rating(
             return None, None
 
         soup = BeautifulSoup(r.text, "html.parser")
-
-        # Find first result
         result = soup.select_one("a.ipc-metadata-list-summary-item__t")
         if not result:
             return None, None
@@ -162,16 +210,15 @@ def fetch_imdb_rating(
 
         imdb_id = imdb_match.group(1)
 
-        # Fetch the title page for rating
-        title_url = f"https://www.imdb.com/title/{imdb_id}/"
+        # Fetch title page
         rate_limiter.wait("imdb.com")
-        r = session.get(title_url, timeout=15)
+        r = session.get(f"https://www.imdb.com/title/{imdb_id}/", timeout=15)
         if r.status_code != 200:
             return None, imdb_id
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Look for rating in JSON-LD first (most reliable)
+        # Look for rating in JSON-LD
         script = soup.find("script", {"type": "application/ld+json"})
         if script:
             try:
@@ -183,18 +230,6 @@ def fetch_imdb_rating(
             except (json.JSONDecodeError, KeyError, TypeError):
                 pass
 
-        # Fallback: look for rating element
-        rating_elem = soup.select_one(
-            "span.sc-eb51e184-1, div[data-testid='hero-rating-bar__aggregate-rating__score'] span"
-        )
-        if rating_elem:
-            text = rating_elem.get_text(strip=True)
-            try:
-                rating = float(text.split("/")[0])
-                return rating, imdb_id
-            except (ValueError, IndexError):
-                pass
-
         return None, imdb_id
 
     except Exception as e:
@@ -204,22 +239,35 @@ def fetch_imdb_rating(
 
 
 def fetch_ratings_for_film(
-    film: dict, session: requests.Session
+    film: dict, session: requests.Session, omdb_api_key: str | None
 ) -> tuple[str, dict]:
-    """Fetch both LB and IMDb ratings for a film. Returns (slug, ratings_dict)."""
+    """Fetch all ratings for a film. Returns (slug, ratings_dict)."""
     slug = film.get("film_slug", "")
     film_url = film.get("film_url", "")
     title = film.get("title", "")
     year = film.get("year")
 
-    # Fetch both ratings (they use different domains so can overlap somewhat)
+    # Letterboxd (always scrape - no API)
     lb_rating = fetch_letterboxd_rating(session, film_url) if film_url else None
-    imdb_rating, imdb_id = fetch_imdb_rating(session, title, year)
+
+    # IMDb + RT + Metacritic
+    if omdb_api_key:
+        omdb = fetch_omdb_ratings(session, title, year, omdb_api_key)
+        imdb_rating = omdb["imdb_rating"]
+        imdb_id = omdb["imdb_id"]
+        rt_rating = omdb["rotten_tomatoes"]
+        metacritic = omdb["metacritic"]
+    else:
+        imdb_rating, imdb_id = fetch_imdb_rating_scrape(session, title, year)
+        rt_rating = None
+        metacritic = None
 
     return slug, {
         "letterboxd_rating": lb_rating,
         "imdb_rating": imdb_rating,
         "imdb_id": imdb_id,
+        "rotten_tomatoes": rt_rating,
+        "metacritic": metacritic,
         "fetched_at": datetime.now().isoformat(),
     }
 
@@ -230,10 +278,17 @@ def enrich_films_with_ratings(
     max_workers: int = MAX_WORKERS,
 ) -> list[dict]:
     """Enrich a list of films with ratings using concurrent fetching."""
+    config = load_config()
+    omdb_api_key = config.get("omdb_api_key")
+
+    if omdb_api_key:
+        print("  Using OMDb API for ratings", file=sys.stderr)
+    else:
+        print("  No OMDb API key - scraping IMDb (slower)", file=sys.stderr)
+
     cache = load_cache()
     cache_lock = threading.Lock()
 
-    # Separate films into cached and uncached
     to_fetch = []
     cached_count = 0
 
@@ -243,12 +298,13 @@ def enrich_films_with_ratings(
             continue
 
         if not force and slug in cache and is_cache_entry_valid(cache[slug]):
-            # Use cached data
             cached_count += 1
             cached = cache[slug]
             film["letterboxd_rating"] = cached.get("letterboxd_rating")
             film["imdb_rating"] = cached.get("imdb_rating")
             film["imdb_id"] = cached.get("imdb_id")
+            film["rotten_tomatoes"] = cached.get("rotten_tomatoes")
+            film["metacritic"] = cached.get("metacritic")
         else:
             to_fetch.append(film)
 
@@ -263,7 +319,6 @@ def enrich_films_with_ratings(
         file=sys.stderr,
     )
 
-    # Create a session per thread for connection pooling
     session_local = threading.local()
 
     def get_session() -> requests.Session:
@@ -273,10 +328,9 @@ def enrich_films_with_ratings(
 
     def fetch_with_session(film: dict) -> tuple[str, dict, dict]:
         session = get_session()
-        slug, ratings = fetch_ratings_for_film(film, session)
+        slug, ratings = fetch_ratings_for_film(film, session, omdb_api_key)
         return slug, ratings, film
 
-    # Fetch concurrently
     completed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(fetch_with_session, film): film for film in to_fetch}
@@ -286,16 +340,16 @@ def enrich_films_with_ratings(
                 slug, ratings, film = future.result()
                 completed += 1
 
-                # Update film
                 film["letterboxd_rating"] = ratings.get("letterboxd_rating")
                 film["imdb_rating"] = ratings.get("imdb_rating")
                 film["imdb_id"] = ratings.get("imdb_id")
+                film["rotten_tomatoes"] = ratings.get("rotten_tomatoes")
+                film["metacritic"] = ratings.get("metacritic")
 
-                # Update cache (thread-safe)
                 with cache_lock:
                     cache[slug] = ratings
 
-                # Progress update
+                # Progress
                 title = film.get("title", "")
                 lb = ratings.get("letterboxd_rating")
                 imdb = ratings.get("imdb_rating")
@@ -306,18 +360,14 @@ def enrich_films_with_ratings(
                     file=sys.stderr,
                 )
 
-                # Save cache periodically
                 if completed % 10 == 0:
                     with cache_lock:
                         save_cache(cache)
 
             except Exception as e:
                 film = futures[future]
-                print(
-                    f"  Error processing {film.get('title', '?')}: {e}", file=sys.stderr
-                )
+                print(f"  Error processing {film.get('title', '?')}: {e}", file=sys.stderr)
 
-    # Final cache save
     save_cache(cache)
     print(f"  Fetched ratings for {completed} films", file=sys.stderr)
 
