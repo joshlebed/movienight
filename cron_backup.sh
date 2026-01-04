@@ -46,8 +46,7 @@ if [ ! -d ".git" ]; then
     exit 0
 fi
 
-# Add all trackable files
-git add cache/*.json reports/*.md 2>/dev/null || true
+git add . || true
 
 if git diff --cached --quiet; then
     echo "No changes to commit"

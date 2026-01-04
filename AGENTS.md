@@ -1,1 +1,1 @@
-See README.md for project documentation.
+See @README.md for project documentation.

@@ -26,6 +26,8 @@ from media_backup.config import (
     get_cache_dir,
     get_letterboxd_cache_dir,
     get_reports_dir,
+    get_shared_reports_dir,
+    get_solo_reports_dir,
     load_config,
 )
 
@@ -133,11 +135,63 @@ def load_json(path: Path) -> list[dict]:
 def get_local_movies(cache_dir: Path) -> list[dict]:
     media_path = cache_dir / "media_library.json"
     media = load_json(media_path)
-    return [
+    movies = [
         item
         for item in media
         if item.get("type") == "movie" and not item.get("error") and item.get("title")
     ]
+
+    # Build ratings lookup from all Letterboxd cache files
+    lb_cache_dir = cache_dir / "letterboxd"
+    ratings_lookup: dict[str, dict] = {}  # normalized_title -> ratings
+
+    if lb_cache_dir.exists():
+        for cache_file in lb_cache_dir.glob("*.json"):
+            films = load_json(cache_file)
+            for film in films:
+                title = film.get("title", "")
+                year = film.get("year")
+                if not title:
+                    continue
+
+                # Create lookup key
+                key = normalize_title(title)
+                if year:
+                    key = f"{key}:{year}"
+
+                # Store ratings if we have any
+                if film.get("letterboxd_rating") or film.get("imdb_rating"):
+                    ratings_lookup[key] = {
+                        "letterboxd_rating": film.get("letterboxd_rating"),
+                        "imdb_rating": film.get("imdb_rating"),
+                        "rotten_tomatoes": film.get("rotten_tomatoes"),
+                        "metacritic": film.get("metacritic"),
+                    }
+
+    # Enrich local movies with ratings
+    for movie in movies:
+        title = movie.get("title", "")
+        year = movie.get("year")
+        if not title:
+            continue
+
+        # Try with year first, then without
+        key_with_year = f"{normalize_title(title)}:{year}" if year else None
+        key_without_year = normalize_title(title)
+
+        cached = None
+        if key_with_year and key_with_year in ratings_lookup:
+            cached = ratings_lookup[key_with_year]
+        elif key_without_year in ratings_lookup:
+            cached = ratings_lookup[key_without_year]
+
+        if cached:
+            movie["letterboxd_rating"] = cached.get("letterboxd_rating")
+            movie["imdb_rating"] = cached.get("imdb_rating")
+            movie["rotten_tomatoes"] = cached.get("rotten_tomatoes")
+            movie["metacritic"] = cached.get("metacritic")
+
+    return movies
 
 
 def format_rating(lb_rating: float | None, imdb_rating: float | None) -> str:
@@ -242,7 +296,7 @@ def write_user_report(
     watchlist_available: list,
     watchlist_missing: list,
     library_unwatched: list,
-    reports_dir: Path,
+    solo_dir: Path,
 ) -> None:
     """Write unified markdown report for a user."""
     lines = [
@@ -263,7 +317,7 @@ def write_user_report(
         format_film_table(library_unwatched),
     ]
 
-    report_path = reports_dir / f"{username}.md"
+    report_path = solo_dir / f"{username}.md"
     with open(report_path, "w") as f:
         f.write("\n".join(lines))
     print(f"  Report written: {report_path}", file=sys.stderr)
@@ -274,7 +328,7 @@ def process_pair(
     user2: str,
     user_data: dict,
     local_movies: list[dict],
-    reports_dir: Path,
+    shared_dir: Path,
 ) -> None:
     """Generate pairwise shared watchlist report."""
     print(f"Processing pair: {user1} + {user2}", file=sys.stderr)
@@ -332,7 +386,7 @@ def process_pair(
         format_film_table(shared_missing),
     ]
 
-    report_path = reports_dir / f"shared_{pair_name}.md"
+    report_path = shared_dir / f"{pair_name}.md"
     with open(report_path, "w") as f:
         f.write("\n".join(lines))
 
@@ -341,11 +395,40 @@ def process_pair(
     print(f"  Report written: {report_path}", file=sys.stderr)
 
 
+def write_library_report(local_movies: list[dict], reports_dir: Path) -> None:
+    """Write a report of the entire media library sorted by Letterboxd rating."""
+    # Build film tuples with ratings
+    films = []
+    for movie in local_movies:
+        title = movie.get("title") or movie.get("folder", "Unknown")
+        year = movie.get("year")
+        lb_rating = movie.get("letterboxd_rating")
+        imdb_rating = movie.get("imdb_rating")
+        rt_rating = movie.get("rotten_tomatoes")
+        metacritic = movie.get("metacritic")
+        films.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
+
+    lines = [
+        "# Media Library",
+        "",
+        f"_{len(films)} films sorted by Letterboxd rating_",
+        "",
+        format_film_table(films),
+    ]
+
+    report_path = reports_dir / "library.md"
+    with open(report_path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"Library report written: {report_path}", file=sys.stderr)
+
+
 def main() -> None:
     config = load_config()
     cache_dir = get_cache_dir()
     lb_cache_dir = get_letterboxd_cache_dir()
     reports_dir = get_reports_dir()
+    solo_dir = get_solo_reports_dir()
+    shared_dir = get_shared_reports_dir()
 
     users = config.get("letterboxd_users", [])
     if not users and config.get("letterboxd_username"):
@@ -376,13 +459,17 @@ def main() -> None:
             "missing": missing,
             "unwatched": unwatched,
         }
-        write_user_report(username, available, missing, unwatched, reports_dir)
+        write_user_report(username, available, missing, unwatched, solo_dir)
 
     # Process pairs (if more than one user)
     if len(args.users) > 1:
         print("", file=sys.stderr)
         for user1, user2 in itertools.combinations(args.users, 2):
-            process_pair(user1, user2, user_data, local_movies, reports_dir)
+            process_pair(user1, user2, user_data, local_movies, shared_dir)
+
+    # Generate library report
+    print("", file=sys.stderr)
+    write_library_report(local_movies, reports_dir)
 
     print("\nDone", file=sys.stderr)
 
