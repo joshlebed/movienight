@@ -22,7 +22,10 @@ VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts"}
 # Patterns that indicate a title is NOT a proper title
 INVALID_TITLE_PATTERNS = re.compile(
     r"(2160p|1080p|720p|480p|BluRay|WEB-DL|WEBRip|HDR|REMUX|x264|x265|HEVC|H\.?265|"
-    r"^Encoded\s|^Ripped\s|^Created\s)",
+    r"^Encoded\s|^Ripped\s|^Created\s|"
+    # Common release groups that might appear as embedded titles
+    r"^(KiNGDOM|SPARKS|YIFY|FGT|EVO|RARBG|GECKOS|AMIABLE|BLOW|DEMAND|DRONES|"
+    r"ROVERS|VETO|FLAME|LOST|PSYCHD|STRIFE|JYK|DEPTH|HANDJOB|USURY|PHEKAN)$)",
     re.IGNORECASE,
 )
 
@@ -107,8 +110,10 @@ def parse_title_year_from_string(s: str) -> tuple[str | None, int | None]:
     return title if title else None, None
 
 
-def extract_title_year(format_tags: dict, folder_name: str) -> tuple[str | None, int | None]:
-    """Extract title and year, preferring embedded metadata over folder name parsing."""
+def extract_title_year(
+    format_tags: dict, folder_name: str, file_name: str | None = None
+) -> tuple[str | None, int | None]:
+    """Extract title and year, preferring embedded metadata over folder/file name parsing."""
     embedded_title = format_tags.get("title", "")
 
     # Check if embedded title looks like a proper title
@@ -121,8 +126,20 @@ def extract_title_year(format_tags: dict, folder_name: str) -> tuple[str | None,
                 year = folder_year
             return title, year
 
-    # Fall back to folder name parsing
-    return parse_title_year_from_string(folder_name)
+    # Try folder name first
+    title, year = parse_title_year_from_string(folder_name)
+
+    # If folder name didn't give us a year, try the filename
+    if not year and file_name:
+        file_title, file_year = parse_title_year_from_string(file_name)
+        if file_year:
+            # Use filename's title and year if we got both
+            if file_title and len(file_title) > len(title or ""):
+                return file_title, file_year
+            # Otherwise just use the year from filename
+            return title, file_year
+
+    return title, year
 
 
 def extract_streams_by_type(streams: list) -> dict:
@@ -252,7 +269,7 @@ def process_media_folder(folder: Path, media_type: str) -> dict | None:
     streams = probe_data.get("streams", [])
 
     # Extract title and year
-    title, year = extract_title_year(format_tags, folder_name)
+    title, year = extract_title_year(format_tags, folder_name, video_file.name)
 
     # File info
     file_size = video_file.stat().st_size

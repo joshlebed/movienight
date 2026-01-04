@@ -72,3 +72,17 @@ def get_reports_dir() -> Path:
     reports_dir = get_data_dir() / "reports"
     reports_dir.mkdir(exist_ok=True)
     return reports_dir
+
+
+def get_solo_reports_dir() -> Path:
+    """Get the solo reports subdirectory."""
+    solo_dir = get_reports_dir() / "solo"
+    solo_dir.mkdir(exist_ok=True)
+    return solo_dir
+
+
+def get_shared_reports_dir() -> Path:
+    """Get the shared reports subdirectory."""
+    shared_dir = get_reports_dir() / "shared"
+    shared_dir.mkdir(exist_ok=True)
+    return shared_dir

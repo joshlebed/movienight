@@ -44,17 +44,13 @@ After running `make backup`, you'll find markdown reports in `data/reports/`:
 ## Commands
 
 ```bash
-make backup        # Full backup (uses 6-month cache)
-make backup-force  # Force fresh Letterboxd scrape
+make backup         # Full backup (uses 6-month cache)
+make backup-force   # Force fresh Letterboxd scrape
+make install-cron   # Install daily cron job (7am)
+make uninstall-cron # Remove cron job
 ```
 
-## Automation
-
-Run daily via cron:
-
-```
-0 4 * * * /path/to/cron_backup.sh >> /path/to/cron.log 2>&1
-```
+The cron commands are idempotent - run `make install-cron` again anytime to update the schedule.
 
 ## Advanced
 
