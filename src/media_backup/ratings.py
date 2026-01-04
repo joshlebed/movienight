@@ -126,9 +126,17 @@ def fetch_letterboxd_rating(session: requests.Session, film_url: str) -> float |
 
 
 def fetch_omdb_ratings(
-    session: requests.Session, title: str, year: int | None, api_key: str
+    session: requests.Session,
+    title: str,
+    year: int | None,
+    api_key: str,
+    imdb_id: str | None = None,
 ) -> dict:
-    """Fetch ratings from OMDb API. Returns dict with imdb/rt/metacritic ratings."""
+    """Fetch ratings from OMDb API. Returns dict with imdb/rt/metacritic ratings.
+
+    If imdb_id is provided, uses the more reliable i= query param.
+    Otherwise falls back to title+year search.
+    """
     result = {
         "imdb_rating": None,
         "imdb_id": None,
@@ -137,9 +145,13 @@ def fetch_omdb_ratings(
     }
 
     try:
-        params = {"apikey": api_key, "t": title, "type": "movie"}
-        if year:
-            params["y"] = year
+        # Use IMDB ID if available (more reliable than title search)
+        if imdb_id:
+            params = {"apikey": api_key, "i": imdb_id, "type": "movie"}
+        else:
+            params = {"apikey": api_key, "t": title, "type": "movie"}
+            if year:
+                params["y"] = year
 
         rate_limiter.wait("omdbapi.com")
         r = session.get("https://www.omdbapi.com/", params=params, timeout=15)
@@ -246,19 +258,24 @@ def fetch_ratings_for_film(
     film_url = film.get("film_url", "")
     title = film.get("title", "")
     year = film.get("year")
+    existing_imdb_id = film.get("imdb_id")  # May already have from film_matcher
 
     # Letterboxd (always scrape - no API)
     lb_rating = fetch_letterboxd_rating(session, film_url) if film_url else None
 
     # IMDb + RT + Metacritic
     if omdb_api_key:
-        omdb = fetch_omdb_ratings(session, title, year, omdb_api_key)
+        # Use existing imdb_id if available (more reliable than title search)
+        omdb = fetch_omdb_ratings(
+            session, title, year, omdb_api_key, imdb_id=existing_imdb_id
+        )
         imdb_rating = omdb["imdb_rating"]
-        imdb_id = omdb["imdb_id"]
+        imdb_id = omdb["imdb_id"] or existing_imdb_id
         rt_rating = omdb["rotten_tomatoes"]
         metacritic = omdb["metacritic"]
     else:
         imdb_rating, imdb_id = fetch_imdb_rating_scrape(session, title, year)
+        imdb_id = imdb_id or existing_imdb_id
         rt_rating = None
         metacritic = None
 
