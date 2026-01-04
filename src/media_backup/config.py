@@ -60,6 +60,21 @@ def get_cache_dir() -> Path:
     return cache_dir
 
 
+def get_film_id_cache_path() -> Path:
+    """Path to the film ID cache (folder -> letterboxd_slug, imdb_id, tmdb_id)."""
+    return get_cache_dir() / "film_id_cache.json"
+
+
+def get_letterboxd_film_cache_path() -> Path:
+    """Path to Letterboxd film cache (slug -> imdb_id, tmdb_id, title, year)."""
+    return get_cache_dir() / "letterboxd_films.json"
+
+
+def get_manual_overrides_path() -> Path:
+    """Path to manual match overrides (folder -> letterboxd_slug)."""
+    return get_cache_dir() / "manual_overrides.json"
+
+
 def get_letterboxd_cache_dir() -> Path:
     """Get the letterboxd cache directory."""
     lb_dir = get_cache_dir() / "letterboxd"

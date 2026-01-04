@@ -21,3 +21,5 @@ build/
 .vscode/
 *.swp
 *.swo
+
+.project-plan/

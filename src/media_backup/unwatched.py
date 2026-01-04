@@ -30,6 +30,7 @@ from media_backup.config import (
     get_solo_reports_dir,
     load_config,
 )
+from media_backup.film_matcher import match_local_films
 
 try:
     from rapidfuzz import fuzz as rapidfuzz
@@ -117,8 +118,33 @@ def find_in_list(film: dict, film_list: list[dict]) -> bool:
     return False
 
 
+def find_local_match_by_slug(
+    film: dict, local_movies: list[dict], slug_lookup: dict[str, dict]
+) -> dict | None:
+    """Find matching local movie by slug first, then fuzzy match.
+
+    Args:
+        film: Letterboxd film dict with film_slug
+        local_movies: List of local movie dicts
+        slug_lookup: Dict mapping slug -> local movie
+
+    Returns:
+        Matching local movie or None
+    """
+    # Try slug-based lookup first (fast)
+    slug = film.get("film_slug")
+    if slug and slug in slug_lookup:
+        return slug_lookup[slug]
+
+    # Fall back to fuzzy matching
+    for movie in local_movies:
+        if films_match({"title": movie["title"], "year": movie.get("year")}, film):
+            return movie
+    return None
+
+
 def find_local_match(film: dict, local_movies: list[dict]) -> dict | None:
-    """Find matching local movie for a film."""
+    """Find matching local movie for a film (fuzzy match only)."""
     for movie in local_movies:
         if films_match({"title": movie["title"], "year": movie.get("year")}, film):
             return movie
@@ -132,7 +158,12 @@ def load_json(path: Path) -> list[dict]:
         return json.load(f)
 
 
-def get_local_movies(cache_dir: Path) -> list[dict]:
+def get_local_movies(cache_dir: Path) -> tuple[list[dict], dict[str, dict]]:
+    """Load local movies and match them to Letterboxd films.
+
+    Returns:
+        Tuple of (movies list, slug_lookup dict mapping slug -> movie)
+    """
     media_path = cache_dir / "media_library.json"
     media = load_json(media_path)
     movies = [
@@ -141,14 +172,17 @@ def get_local_movies(cache_dir: Path) -> list[dict]:
         if item.get("type") == "movie" and not item.get("error") and item.get("title")
     ]
 
-    # Build ratings lookup from all Letterboxd cache files
+    # Build ratings lookup and collect all Letterboxd films from cache files
     lb_cache_dir = cache_dir / "letterboxd"
     ratings_lookup: dict[str, dict] = {}  # normalized_title -> ratings
+    all_letterboxd_films: list[dict] = []
 
     if lb_cache_dir.exists():
         for cache_file in lb_cache_dir.glob("*.json"):
             films = load_json(cache_file)
             for film in films:
+                all_letterboxd_films.append(film)
+
                 title = film.get("title", "")
                 year = film.get("year")
                 if not title:
@@ -167,6 +201,10 @@ def get_local_movies(cache_dir: Path) -> list[dict]:
                         "rotten_tomatoes": film.get("rotten_tomatoes"),
                         "metacritic": film.get("metacritic"),
                     }
+
+    # Match local movies to Letterboxd films (adds letterboxd_slug, imdb_id, etc.)
+    if all_letterboxd_films:
+        movies, _ = match_local_films(movies, all_letterboxd_films)
 
     # Enrich local movies with ratings
     for movie in movies:
@@ -191,7 +229,14 @@ def get_local_movies(cache_dir: Path) -> list[dict]:
             movie["rotten_tomatoes"] = cached.get("rotten_tomatoes")
             movie["metacritic"] = cached.get("metacritic")
 
-    return movies
+    # Build slug lookup for fast matching
+    slug_lookup: dict[str, dict] = {}
+    for movie in movies:
+        slug = movie.get("letterboxd_slug")
+        if slug:
+            slug_lookup[slug] = movie
+
+    return movies, slug_lookup
 
 
 def format_rating(lb_rating: float | None, imdb_rating: float | None) -> str:
@@ -230,7 +275,10 @@ def format_film_table(
 
 
 def process_user(
-    username: str, local_movies: list[dict], lb_cache_dir: Path
+    username: str,
+    local_movies: list[dict],
+    slug_lookup: dict[str, dict],
+    lb_cache_dir: Path,
 ) -> tuple[dict, list, list, list]:
     """Process a single user and return data for report generation."""
     print(f"Processing user: {username}", file=sys.stderr)
@@ -261,7 +309,7 @@ def process_user(
         year = film.get("year")
         title = film["title"]
 
-        local_match = find_local_match(film, local_movies)
+        local_match = find_local_match_by_slug(film, local_movies, slug_lookup)
         if local_match:
             watchlist_available.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
         else:
@@ -328,6 +376,7 @@ def process_pair(
     user2: str,
     user_data: dict,
     local_movies: list[dict],
+    slug_lookup: dict[str, dict],
     shared_dir: Path,
 ) -> None:
     """Generate pairwise shared watchlist report."""
@@ -362,7 +411,7 @@ def process_pair(
         year = film1.get("year")
         title = film1["title"]
 
-        local_match = find_local_match(film1, local_movies)
+        local_match = find_local_match_by_slug(film1, local_movies, slug_lookup)
         if local_match:
             shared_available.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
         else:
@@ -444,14 +493,16 @@ def main() -> None:
         print("Error: No users specified")
         raise SystemExit(1)
 
-    local_movies = get_local_movies(cache_dir)
+    local_movies, slug_lookup = get_local_movies(cache_dir)
     print(f"Local library: {len(local_movies)} movies", file=sys.stderr)
+    if slug_lookup:
+        print(f"  Matched {len(slug_lookup)} to Letterboxd", file=sys.stderr)
 
     # Process each user
     user_data = {}
     for username in args.users:
         watched_watchlist, available, missing, unwatched = process_user(
-            username, local_movies, lb_cache_dir
+            username, local_movies, slug_lookup, lb_cache_dir
         )
         user_data[username] = {
             "watched_watchlist": watched_watchlist,
@@ -465,7 +516,7 @@ def main() -> None:
     if len(args.users) > 1:
         print("", file=sys.stderr)
         for user1, user2 in itertools.combinations(args.users, 2):
-            process_pair(user1, user2, user_data, local_movies, shared_dir)
+            process_pair(user1, user2, user_data, local_movies, slug_lookup, shared_dir)
 
     # Generate library report
     print("", file=sys.stderr)
