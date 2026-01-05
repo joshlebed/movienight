@@ -9,9 +9,15 @@ import argparse
 import json
 import re
 import sys
+import threading
+import time
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
+from urllib.parse import quote
+
+import requests
+from bs4 import BeautifulSoup
 
 try:
     from rapidfuzz import fuzz as rapidfuzz
@@ -26,6 +32,121 @@ from media_backup.config import (
     get_letterboxd_cache_dir,
     get_manual_overrides_path,
 )
+
+
+# Rate limiter for web requests
+RATE_LIMIT_DELAY = 0.5
+
+
+class RateLimiter:
+    """Thread-safe rate limiter per domain."""
+
+    def __init__(self, min_delay: float = RATE_LIMIT_DELAY):
+        self.min_delay = min_delay
+        self.last_request: dict[str, float] = {}
+        self.lock = threading.Lock()
+
+    def wait(self, domain: str) -> None:
+        with self.lock:
+            now = time.time()
+            last = self.last_request.get(domain, 0)
+            wait_time = self.min_delay - (now - last)
+            if wait_time > 0:
+                time.sleep(wait_time)
+            self.last_request[domain] = time.time()
+
+
+rate_limiter = RateLimiter()
+
+
+def create_session() -> requests.Session:
+    """Create a requests session with browser-like headers."""
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+    return session
+
+
+def search_letterboxd(
+    session: requests.Session,
+    title: str,
+    year: int | None = None,
+) -> dict | None:
+    """Search Letterboxd for a film and return the best match.
+
+    Uses Letterboxd's autocomplete API which returns JSON results.
+
+    Args:
+        session: requests Session
+        title: Film title to search for
+        year: Optional year to filter results
+
+    Returns:
+        Dict with slug, title, year, score if found, None otherwise
+    """
+    search_title = title.strip()
+
+    # Use the autocomplete API endpoint
+    url = "https://letterboxd.com/s/autocompletefilm"
+
+    # Try different query variations
+    queries = [search_title]
+    if year:
+        queries.insert(0, f"{search_title} {year}")
+
+    for query in queries:
+        try:
+            rate_limiter.wait("letterboxd.com")
+
+            # Set headers for AJAX request
+            headers = {
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+
+            r = session.get(url, params={"q": query, "limit": 10}, headers=headers, timeout=15)
+            if r.status_code != 200:
+                continue
+
+            data = r.json()
+            if not data.get("result") or not data.get("data"):
+                continue
+
+            # Check results
+            for film in data["data"]:
+                result_title = film.get("name", "")
+                result_year = film.get("releaseYear")
+                slug = film.get("slug")
+
+                if not slug:
+                    continue
+
+                # If we have a year constraint, verify it matches (within 1 year)
+                if year and result_year and abs(year - result_year) > 1:
+                    continue
+
+                # Verify title similarity
+                norm_search = normalize_title(search_title)
+                norm_result = normalize_title(result_title)
+                score = max(fuzzy_ratio(norm_search, norm_result),
+                           token_sort_ratio(norm_search, norm_result))
+
+                # Lower threshold for API search since we trust Letterboxd's ranking
+                if score >= 60:
+                    return {
+                        "slug": slug,
+                        "title": result_title,
+                        "year": result_year,
+                        "score": score,
+                    }
+
+        except Exception as e:
+            print(f"  Search error for '{query}': {e}", file=sys.stderr)
+            continue
+
+    return None
 
 # Cache entry structure for film_id_cache.json:
 # {
@@ -166,8 +287,10 @@ def get_match_for_folder(
     overrides: dict[str, dict],
     letterboxd_films: list[dict],
     embedded_imdb: str | None = None,
+    session: requests.Session | None = None,
+    verbose: bool = False,
 ) -> dict | None:
-    """Get match for a single folder using cascade: cache -> override -> embedded -> fuzzy.
+    """Get match for a single folder using cascade: cache -> override -> embedded -> fuzzy -> search.
 
     Args:
         folder: The folder name (cache key)
@@ -177,6 +300,8 @@ def get_match_for_folder(
         overrides: Manual overrides dict
         letterboxd_films: List of Letterboxd films to match against
         embedded_imdb: IMDB ID from file metadata, if any
+        session: Optional requests session for Letterboxd search
+        verbose: If True, log match decisions
 
     Returns:
         Cache entry dict or None if no match
@@ -220,7 +345,7 @@ def get_match_for_folder(
                     match_score=100.0,
                 )
 
-    # 4. Fuzzy match
+    # 4. Fuzzy match against known Letterboxd films
     best_match = None
     best_score = 0.0
 
@@ -242,7 +367,22 @@ def get_match_for_folder(
             match_score=best_score,
         )
 
-    # 5. No match found
+    # 5. Search Letterboxd directly for films not in user's watched/watchlist
+    if session and title:
+        if verbose:
+            print(f"  Searching Letterboxd for: {title} ({year})", file=sys.stderr)
+
+        result = search_letterboxd(session, title, year)
+        if result:
+            return create_cache_entry(
+                letterboxd_slug=result["slug"],
+                imdb_id=None,  # Will be enriched later
+                tmdb_id=None,
+                match_method="letterboxd_search",
+                match_score=result["score"],
+            )
+
+    # 6. No match found
     return None
 
 
@@ -267,6 +407,7 @@ def match_local_films(
     """
     cache = {} if force_rematch else load_film_id_cache()
     overrides = load_manual_overrides()
+    session = create_session()
 
     matched_count = 0
     unmatched_movies = []
@@ -285,6 +426,8 @@ def match_local_films(
             overrides=overrides,
             letterboxd_films=letterboxd_films,
             embedded_imdb=embedded_imdb,
+            session=session,
+            verbose=verbose,
         )
 
         if match:
