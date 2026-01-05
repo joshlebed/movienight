@@ -31,6 +31,8 @@ from media_backup.config import (
     load_config,
 )
 from media_backup.film_matcher import match_local_films
+from media_backup.letterboxd_ids import enrich_films_with_ids
+from media_backup.ratings import enrich_films_with_ratings
 
 try:
     from rapidfuzz import fuzz as rapidfuzz
@@ -206,28 +208,44 @@ def get_local_movies(cache_dir: Path) -> tuple[list[dict], dict[str, dict]]:
     if all_letterboxd_films:
         movies, _ = match_local_films(movies, all_letterboxd_films)
 
-    # Enrich local movies with ratings
+    # Convert matched movies to Letterboxd format for rating enrichment
+    # The ratings.py module expects: film_slug, film_url, title, year, imdb_id
+    movies_to_enrich = []
     for movie in movies:
-        title = movie.get("title", "")
-        year = movie.get("year")
-        if not title:
-            continue
+        slug = movie.get("letterboxd_slug")
+        if slug:
+            # Create a film dict in the format enrich_films_with_ratings expects
+            film = {
+                "film_slug": slug,
+                "film_url": f"https://letterboxd.com/film/{slug}/",
+                "title": movie.get("title", ""),
+                "year": movie.get("year"),
+                "imdb_id": movie.get("imdb_id"),  # May have from matcher
+            }
+            movies_to_enrich.append((movie, film))
 
-        # Try with year first, then without
-        key_with_year = f"{normalize_title(title)}:{year}" if year else None
-        key_without_year = normalize_title(title)
+    if movies_to_enrich:
+        # Extract just the film dicts for enrichment
+        films_for_enrichment = [f for _, f in movies_to_enrich]
 
-        cached = None
-        if key_with_year and key_with_year in ratings_lookup:
-            cached = ratings_lookup[key_with_year]
-        elif key_without_year in ratings_lookup:
-            cached = ratings_lookup[key_without_year]
+        # First get IMDB/TMDB IDs from Letterboxd pages (for reliable OMDb lookup)
+        films_needing_ids = [f for f in films_for_enrichment if not f.get("imdb_id")]
+        if films_needing_ids:
+            print(f"  Fetching IMDB IDs for {len(films_needing_ids)} local movies...", file=sys.stderr)
+            enrich_films_with_ids(films_needing_ids)
 
-        if cached:
-            movie["letterboxd_rating"] = cached.get("letterboxd_rating")
-            movie["imdb_rating"] = cached.get("imdb_rating")
-            movie["rotten_tomatoes"] = cached.get("rotten_tomatoes")
-            movie["metacritic"] = cached.get("metacritic")
+        print(f"  Enriching {len(films_for_enrichment)} local movies with ratings...", file=sys.stderr)
+        enrich_films_with_ratings(films_for_enrichment)
+
+        # Copy ratings back to movie dicts
+        for movie, film in movies_to_enrich:
+            movie["letterboxd_rating"] = film.get("letterboxd_rating")
+            movie["imdb_rating"] = film.get("imdb_rating")
+            movie["rotten_tomatoes"] = film.get("rotten_tomatoes")
+            movie["metacritic"] = film.get("metacritic")
+            # Also update imdb_id if we got it from OMDb
+            if film.get("imdb_id") and not movie.get("imdb_id"):
+                movie["imdb_id"] = film.get("imdb_id")
 
     # Build slug lookup for fast matching
     slug_lookup: dict[str, dict] = {}
@@ -247,11 +265,11 @@ def format_rating(lb_rating: float | None, imdb_rating: float | None) -> str:
 
 
 def format_film_table(
-    films: list[tuple[float | None, float | None, int | None, int | None, int | None, str]],
+    films: list[tuple[float | None, float | None, int | None, int | None, int | None, str, str | None]],
 ) -> str:
     """Format films as a markdown table.
 
-    Each film is (lb_rating, imdb_rating, rt_rating, metacritic, year, title).
+    Each film is (lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug).
     """
     if not films:
         return "_No films_\n"
@@ -262,14 +280,17 @@ def format_film_table(
         key=lambda x: (-(x[0] or 0), -(x[1] or 0), x[5].lower()),
     )
 
-    lines = ["| LB | IMDb | RT | MC | Year | Title |", "|---:|-----:|---:|---:|:----:|:------|"]
-    for lb_rating, imdb_rating, rt_rating, metacritic, year, title in sorted_films:
+    lines = ["| LB | IMDb | RT | MC | Year | Title | Letterboxd |", "|---:|-----:|---:|---:|:----:|:------|:-----------|"]
+    for lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug in sorted_films:
         year_str = str(year) if year else "????"
         lb_str = f"{lb_rating:.1f}" if lb_rating else "-"
         imdb_str = f"{imdb_rating:.1f}" if imdb_rating else "-"
         rt_str = f"{rt_rating}%" if rt_rating else "-"
         mc_str = str(metacritic) if metacritic else "-"
-        lines.append(f"| {lb_str} | {imdb_str} | {rt_str} | {mc_str} | {year_str} | {title} |")
+        # Escape pipe characters to avoid breaking markdown table
+        title_escaped = title.replace("|", "∣")
+        lb_url = f"[Link](https://letterboxd.com/film/{film_slug}/)" if film_slug else "-"
+        lines.append(f"| {lb_str} | {imdb_str} | {rt_str} | {mc_str} | {year_str} | {title_escaped} | {lb_url} |")
 
     return "\n".join(lines) + "\n"
 
@@ -279,7 +300,7 @@ def process_user(
     local_movies: list[dict],
     slug_lookup: dict[str, dict],
     lb_cache_dir: Path,
-) -> tuple[dict, list, list, list]:
+) -> tuple[dict, list, list, list, list]:
     """Process a single user and return data for report generation."""
     print(f"Processing user: {username}", file=sys.stderr)
 
@@ -288,13 +309,14 @@ def process_user(
 
     if not watched and not watchlist:
         print(f"  No data found for {username}, skipping", file=sys.stderr)
-        return {"watched": [], "watchlist": []}, [], [], []
+        return {"watched": [], "watchlist": []}, [], [], [], []
 
     print(f"  Watched: {len(watched)}, Watchlist: {len(watchlist)}", file=sys.stderr)
 
-    watchlist_available = []  # (lb_rating, imdb_rating, rt, mc, year, title)
+    watchlist_available = []  # (lb_rating, imdb_rating, rt, mc, year, title, film_slug)
     watchlist_missing = []
     library_unwatched = []
+    library_watched = []
 
     # Process watchlist
     for film in watchlist:
@@ -308,14 +330,15 @@ def process_user(
         metacritic = film.get("metacritic")
         year = film.get("year")
         title = film["title"]
+        film_slug = film.get("film_slug")
 
         local_match = find_local_match_by_slug(film, local_movies, slug_lookup)
         if local_match:
-            watchlist_available.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
+            watchlist_available.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug))
         else:
-            watchlist_missing.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
+            watchlist_missing.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug))
 
-    # Process local movies for library_unwatched
+    # Process local movies for library_unwatched and library_watched
     for movie in local_movies:
         title = movie["title"]
         year = movie.get("year")
@@ -324,18 +347,28 @@ def process_user(
         is_watched = find_in_list(movie_dict, watched)
         is_on_watchlist = find_in_list(movie_dict, watchlist)
 
-        if not is_watched and not is_on_watchlist:
-            library_unwatched.append((None, None, None, None, year, title))
+        lb_rating = movie.get("letterboxd_rating")
+        imdb_rating = movie.get("imdb_rating")
+        rt_rating = movie.get("rotten_tomatoes")
+        metacritic = movie.get("metacritic")
+        film_slug = movie.get("letterboxd_slug")
+
+        if is_watched and not is_on_watchlist:
+            library_watched.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug))
+        elif not is_watched and not is_on_watchlist:
+            library_unwatched.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug))
 
     print(f"  Watchlist available: {len(watchlist_available)} films", file=sys.stderr)
     print(f"  Watchlist missing: {len(watchlist_missing)} films", file=sys.stderr)
     print(f"  Library unwatched: {len(library_unwatched)} films", file=sys.stderr)
+    print(f"  Library watched: {len(library_watched)} films", file=sys.stderr)
 
     return (
         {"watched": watched, "watchlist": watchlist},
         watchlist_available,
         watchlist_missing,
         library_unwatched,
+        library_watched,
     )
 
 
@@ -344,6 +377,7 @@ def write_user_report(
     watchlist_available: list,
     watchlist_missing: list,
     library_unwatched: list,
+    library_watched: list,
     solo_dir: Path,
 ) -> None:
     """Write unified markdown report for a user."""
@@ -363,6 +397,12 @@ def write_user_report(
         "_Films in your local library that you haven't watched and aren't on your watchlist._",
         "",
         format_film_table(library_unwatched),
+        "",
+        f"## Library Already Watched ({len(library_watched)} films)",
+        "",
+        "_Films in your local library that you've already seen._",
+        "",
+        format_film_table(library_watched),
     ]
 
     report_path = solo_dir / f"{username}.md"
@@ -392,7 +432,7 @@ def process_pair(
         return
 
     # Find intersection of watchlists
-    shared_available = []  # (lb_rating, imdb_rating, rt, mc, year, title)
+    shared_available = []  # (lb_rating, imdb_rating, rt, mc, year, title, film_slug)
     shared_missing = []
 
     for film1 in watchlist1:
@@ -410,12 +450,31 @@ def process_pair(
         metacritic = film1.get("metacritic")
         year = film1.get("year")
         title = film1["title"]
+        film_slug = film1.get("film_slug")
 
         local_match = find_local_match_by_slug(film1, local_movies, slug_lookup)
         if local_match:
-            shared_available.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
+            shared_available.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug))
         else:
-            shared_missing.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
+            shared_missing.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug))
+
+    # Find local movies both users have watched (and neither has on watchlist)
+    shared_watched = []
+    for movie in local_movies:
+        title = movie["title"]
+        year = movie.get("year")
+        movie_dict = {"title": title, "year": year}
+
+        both_watched = find_in_list(movie_dict, watched1) and find_in_list(movie_dict, watched2)
+        on_either_watchlist = find_in_list(movie_dict, watchlist1) or find_in_list(movie_dict, watchlist2)
+
+        if both_watched and not on_either_watchlist:
+            lb_rating = movie.get("letterboxd_rating")
+            imdb_rating = movie.get("imdb_rating")
+            rt_rating = movie.get("rotten_tomatoes")
+            metacritic = movie.get("metacritic")
+            film_slug = movie.get("letterboxd_slug")
+            shared_watched.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug))
 
     # Sort names for consistent filename
     pair_name = "_".join(sorted([user1, user2]))
@@ -433,6 +492,12 @@ def process_pair(
         f"## Not Available ({len(shared_missing)} films)",
         "",
         format_film_table(shared_missing),
+        "",
+        f"## Library Already Watched Together ({len(shared_watched)} films)",
+        "",
+        "_Films in the local library that both users have already seen._",
+        "",
+        format_film_table(shared_watched),
     ]
 
     report_path = shared_dir / f"{pair_name}.md"
@@ -441,6 +506,7 @@ def process_pair(
 
     print(f"  Shared available: {len(shared_available)} films", file=sys.stderr)
     print(f"  Shared missing: {len(shared_missing)} films", file=sys.stderr)
+    print(f"  Shared watched: {len(shared_watched)} films", file=sys.stderr)
     print(f"  Report written: {report_path}", file=sys.stderr)
 
 
@@ -455,7 +521,8 @@ def write_library_report(local_movies: list[dict], reports_dir: Path) -> None:
         imdb_rating = movie.get("imdb_rating")
         rt_rating = movie.get("rotten_tomatoes")
         metacritic = movie.get("metacritic")
-        films.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title))
+        film_slug = movie.get("letterboxd_slug")
+        films.append((lb_rating, imdb_rating, rt_rating, metacritic, year, title, film_slug))
 
     lines = [
         "# Media Library",
@@ -501,7 +568,7 @@ def main() -> None:
     # Process each user
     user_data = {}
     for username in args.users:
-        watched_watchlist, available, missing, unwatched = process_user(
+        watched_watchlist, available, missing, unwatched, watched = process_user(
             username, local_movies, slug_lookup, lb_cache_dir
         )
         user_data[username] = {
@@ -509,8 +576,9 @@ def main() -> None:
             "available": available,
             "missing": missing,
             "unwatched": unwatched,
+            "watched": watched,
         }
-        write_user_report(username, available, missing, unwatched, solo_dir)
+        write_user_report(username, available, missing, unwatched, watched, solo_dir)
 
     # Process pairs (if more than one user)
     if len(args.users) > 1:

@@ -146,10 +146,12 @@ def fetch_omdb_ratings(
 
     try:
         # Use IMDB ID if available (more reliable than title search)
+        # Note: Don't restrict to type=movie since some entries (e.g. miniseries) are
+        # classified differently on IMDb but still appear on Letterboxd as films
         if imdb_id:
-            params = {"apikey": api_key, "i": imdb_id, "type": "movie"}
+            params = {"apikey": api_key, "i": imdb_id}
         else:
-            params = {"apikey": api_key, "t": title, "type": "movie"}
+            params = {"apikey": api_key, "t": title}
             if year:
                 params["y"] = year
 

@@ -23,6 +23,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from media_backup.config import get_letterboxd_cache_dir, load_config
+from media_backup.letterboxd_ids import enrich_films_with_ids
 from media_backup.ratings import enrich_films_with_ratings
 
 LETTERBOXD_BASE = "https://letterboxd.com"
@@ -185,6 +186,10 @@ def scrape_user(
 
         # Still enrich with ratings if requested
         if with_ratings:
+            # First get IMDB/TMDB IDs from Letterboxd pages (more reliable than title search)
+            print("  Enriching with IMDB/TMDB IDs...", file=sys.stderr)
+            enrich_films_with_ids(watched + watchlist)
+
             print("  Enriching watched films with ratings...", file=sys.stderr)
             watched = enrich_films_with_ratings(watched)
             write_json(watched_path, watched)
@@ -208,6 +213,10 @@ def scrape_user(
 
     # Enrich with ratings if requested
     if with_ratings:
+        # First get IMDB/TMDB IDs from Letterboxd pages (more reliable than title search)
+        print("  Enriching with IMDB/TMDB IDs...", file=sys.stderr)
+        enrich_films_with_ids(watched + watchlist)
+
         print("  Enriching watched films with ratings...", file=sys.stderr)
         watched = enrich_films_with_ratings(watched)
 
