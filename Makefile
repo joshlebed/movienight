@@ -6,7 +6,7 @@
 #
 # The backup uses 6-month caching for Letterboxd data. Use `make backup-force` to bypass.
 
-.PHONY: setup backup backup-force install-cron uninstall-cron lint format clean help
+.PHONY: setup backup backup-force install-cron uninstall-cron lint format clean clear-letterboxd-user-data help
 
 help:
 	@echo "make setup         Interactive setup wizard"
@@ -16,6 +16,7 @@ help:
 	@echo "make uninstall-cron Remove cron job"
 	@echo "make lint          Run linter"
 	@echo "make format        Format code"
+	@echo "make clear-letterboxd-user-data  Clear cached watchlist/watched data for all users"
 
 setup:
 	uv sync
@@ -56,3 +57,7 @@ format:
 
 clean:
 	rm -rf .ruff_cache __pycache__ src/**/__pycache__
+
+clear-letterboxd-user-data:
+	rm -f data/cache/letterboxd/*.json
+	@echo "Cleared watchlist/watched cache for all users"
