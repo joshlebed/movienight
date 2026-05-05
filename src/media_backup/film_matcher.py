@@ -11,10 +11,10 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -32,6 +32,12 @@ from media_backup.config import (
     get_letterboxd_cache_dir,
     get_manual_overrides_path,
 )
+from media_backup.letterboxd_ids import (
+    load_letterboxd_film_cache,
+    save_letterboxd_film_cache,
+)
+
+LETTERBOXD_BASE = "https://letterboxd.com"
 
 
 # Rate limiter for web requests
@@ -69,82 +75,198 @@ def create_session() -> requests.Session:
     return session
 
 
+# Edition modifiers stripped from titles before slug derivation.
+EDITION_MODIFIERS = (
+    "directors cut",
+    "director's cut",
+    "theatrical cut",
+    "theatrical",
+    "extended cut",
+    "extended",
+    "final cut",
+    "remastered",
+    "restored",
+    "uncut",
+    "unrated",
+    "special edition",
+    "limited edition",
+    "criterion",
+    "criterion collection",
+    "redux",
+    "imax",
+    "repack",
+    "proper",
+    "rerip",
+    "open matte",
+)
+
+
+def slugify_title(title: str) -> str:
+    """Convert a title to a Letterboxd-style slug.
+
+    Letterboxd's convention: lowercase, drop punctuation that's not a separator
+    (apostrophes, accents folded), collapse remaining non-alphanumerics to a
+    single hyphen. So "All The President's Men" -> "all-the-presidents-men",
+    "Amélie" -> "amelie".
+    """
+    nfkd = unicodedata.normalize("NFKD", title)
+    ascii_only = "".join(c for c in nfkd if not unicodedata.combining(c))
+    # Drop apostrophes/quotes outright (don't turn into hyphens).
+    cleaned = re.sub(r"[’‘'`\"]", "", ascii_only)
+    # Collapse anything else non-alphanumeric to a hyphen.
+    slug = re.sub(r"[^a-z0-9]+", "-", cleaned.lower()).strip("-")
+    return slug
+
+
+def strip_edition_modifiers(title: str) -> str:
+    """Remove edition/release modifiers like 'Uncut', 'Director's Cut', etc."""
+    t = title
+    for mod in EDITION_MODIFIERS:
+        t = re.sub(rf"\b{re.escape(mod)}\b", "", t, flags=re.IGNORECASE)
+    return " ".join(t.split())
+
+
+def candidate_slugs(title: str, year: int | None) -> list[str]:
+    """Generate plausible Letterboxd slug candidates for a (title, year).
+
+    Order matters — first hit wins. Bare slug is tried before year-suffixed
+    because Letterboxd uses the bare form for the canonical entry.
+    """
+    cleaned = strip_edition_modifiers(title)
+
+    # If the title contains "AKA" (alternate title), try each side too.
+    forms = [cleaned]
+    aka_parts = re.split(r"\s+aka\s+", cleaned, flags=re.IGNORECASE)
+    if len(aka_parts) > 1:
+        forms.extend(p.strip() for p in aka_parts if p.strip())
+
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for form in forms:
+        base = slugify_title(form)
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        candidates.append(base)
+        if year:
+            candidates.append(f"{base}-{year}")
+    return candidates
+
+
+def parse_film_page(html: str) -> dict:
+    """Extract slug-stable fields from a Letterboxd film page.
+
+    Returns a dict with keys: title, year, imdb_id, tmdb_id (any may be None).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    page_title: str | None = None
+    page_year: int | None = None
+    og = soup.find("meta", property="og:title")
+    if og and og.get("content"):
+        content = og["content"]
+        m = re.match(r"(.+?)\s*\((\d{4})\)\s*$", content)
+        if m:
+            page_title = m.group(1).strip()
+            page_year = int(m.group(2))
+        else:
+            page_title = content.strip()
+
+    if page_year is None:
+        yr_link = soup.find("a", href=re.compile(r"/films/year/\d{4}"))
+        if yr_link:
+            m = re.search(r"(\d{4})", yr_link.get("href", ""))
+            if m:
+                page_year = int(m.group(1))
+
+    imdb_id: str | None = None
+    imdb_link = soup.find("a", href=re.compile(r"imdb\.com/title/tt\d+"))
+    if imdb_link:
+        m = re.search(r"(tt\d+)", imdb_link["href"])
+        if m:
+            imdb_id = m.group(1)
+
+    tmdb_id: str | None = None
+    tmdb_link = soup.find("a", href=re.compile(r"themoviedb\.org/movie/\d+"))
+    if tmdb_link:
+        m = re.search(r"/movie/(\d+)", tmdb_link["href"])
+        if m:
+            tmdb_id = m.group(1)
+
+    return {
+        "title": page_title,
+        "year": page_year,
+        "imdb_id": imdb_id,
+        "tmdb_id": tmdb_id,
+    }
+
+
 def search_letterboxd(
     session: requests.Session,
     title: str,
     year: int | None = None,
+    film_page_cache: dict[str, dict] | None = None,
 ) -> dict | None:
-    """Search Letterboxd for a film and return the best match.
+    """Find a Letterboxd film by guessing slugs and validating the film page.
 
-    Uses Letterboxd's autocomplete API which returns JSON results.
+    The autocomplete/search/imdb-redirect endpoints are Cloudflare-protected
+    and return 403 to scripted clients, but the per-film pages
+    (/film/<slug>/) are reachable. This function generates plausible slugs
+    from the title (and year for disambiguation), fetches each candidate
+    page, and returns the first one whose year matches (within 1 year).
 
     Args:
         session: requests Session
         title: Film title to search for
-        year: Optional year to filter results
+        year: Optional year for disambiguation/validation
+        film_page_cache: Optional slug-keyed cache to populate with the
+            scraped IMDB/TMDB IDs (so a successful guess seeds the
+            letterboxd_films.json cache and avoids a re-fetch later).
 
     Returns:
-        Dict with slug, title, year, score if found, None otherwise
+        Dict with slug, title, year, imdb_id, tmdb_id, score on success.
     """
-    search_title = title.strip()
-
-    # Use the autocomplete API endpoint
-    url = "https://letterboxd.com/s/autocompletefilm"
-
-    # Try different query variations
-    queries = [search_title]
-    if year:
-        queries.insert(0, f"{search_title} {year}")
-
-    for query in queries:
+    for slug in candidate_slugs(title, year):
+        rate_limiter.wait("letterboxd.com")
         try:
-            rate_limiter.wait("letterboxd.com")
+            r = session.get(
+                f"{LETTERBOXD_BASE}/film/{slug}/",
+                timeout=15,
+                allow_redirects=False,
+            )
+        except requests.RequestException as e:
+            print(f"  Slug fetch error for '{slug}': {e}", file=sys.stderr)
+            continue
 
-            # Set headers for AJAX request
-            headers = {
-                "Accept": "application/json, text/javascript, */*; q=0.01",
-                "X-Requested-With": "XMLHttpRequest",
+        if r.status_code != 200:
+            continue
+
+        page = parse_film_page(r.text)
+        page_year = page.get("year")
+
+        # Year validation: if both years are known they must be within 1.
+        if year and page_year and abs(year - page_year) > 1:
+            continue
+
+        # Seed the slug-keyed film cache so enrich_films_with_ids doesn't
+        # re-fetch the same page on the next run.
+        if film_page_cache is not None:
+            film_page_cache[slug] = {
+                "imdb_id": page.get("imdb_id"),
+                "tmdb_id": page.get("tmdb_id"),
+                "title": page.get("title"),
+                "year": page_year,
+                "scraped_at": datetime.now().isoformat(),
             }
 
-            r = session.get(url, params={"q": query, "limit": 10}, headers=headers, timeout=15)
-            if r.status_code != 200:
-                continue
-
-            data = r.json()
-            if not data.get("result") or not data.get("data"):
-                continue
-
-            # Check results
-            for film in data["data"]:
-                result_title = film.get("name", "")
-                result_year = film.get("releaseYear")
-                slug = film.get("slug")
-
-                if not slug:
-                    continue
-
-                # If we have a year constraint, verify it matches (within 1 year)
-                if year and result_year and abs(year - result_year) > 1:
-                    continue
-
-                # Verify title similarity
-                norm_search = normalize_title(search_title)
-                norm_result = normalize_title(result_title)
-                score = max(fuzzy_ratio(norm_search, norm_result),
-                           token_sort_ratio(norm_search, norm_result))
-
-                # Lower threshold for API search since we trust Letterboxd's ranking
-                if score >= 60:
-                    return {
-                        "slug": slug,
-                        "title": result_title,
-                        "year": result_year,
-                        "score": score,
-                    }
-
-        except Exception as e:
-            print(f"  Search error for '{query}': {e}", file=sys.stderr)
-            continue
+        return {
+            "slug": slug,
+            "title": page.get("title") or title,
+            "year": page_year,
+            "imdb_id": page.get("imdb_id"),
+            "tmdb_id": page.get("tmdb_id"),
+            "score": 100.0,
+        }
 
     return None
 
@@ -222,7 +344,10 @@ def normalize_title(title: str) -> str:
         "extended",
         "theatrical",
         "unrated",
+        "uncut",
         "special edition",
+        "final cut",
+        "criterion",
     ]:
         t = t.replace(suffix, "")
 
@@ -288,6 +413,7 @@ def get_match_for_folder(
     letterboxd_films: list[dict],
     embedded_imdb: str | None = None,
     session: requests.Session | None = None,
+    film_page_cache: dict[str, dict] | None = None,
     verbose: bool = False,
 ) -> dict | None:
     """Get match for a single folder using cascade: cache -> override -> embedded -> fuzzy -> search.
@@ -372,12 +498,12 @@ def get_match_for_folder(
         if verbose:
             print(f"  Searching Letterboxd for: {title} ({year})", file=sys.stderr)
 
-        result = search_letterboxd(session, title, year)
+        result = search_letterboxd(session, title, year, film_page_cache=film_page_cache)
         if result:
             return create_cache_entry(
                 letterboxd_slug=result["slug"],
-                imdb_id=None,  # Will be enriched later
-                tmdb_id=None,
+                imdb_id=result.get("imdb_id"),
+                tmdb_id=result.get("tmdb_id"),
                 match_method="letterboxd_search",
                 match_score=result["score"],
             )
@@ -409,6 +535,11 @@ def match_local_films(
     overrides = load_manual_overrides()
     session = create_session()
 
+    # Slug-keyed cache; passed into search_letterboxd so any page we fetch for
+    # slug-guess validation is also persisted as the film page cache.
+    film_page_cache = load_letterboxd_film_cache()
+    film_page_cache_size = len(film_page_cache)
+
     matched_count = 0
     unmatched_movies = []
 
@@ -427,6 +558,7 @@ def match_local_films(
             letterboxd_films=letterboxd_films,
             embedded_imdb=embedded_imdb,
             session=session,
+            film_page_cache=film_page_cache,
             verbose=verbose,
         )
 
@@ -450,9 +582,11 @@ def match_local_films(
         else:
             unmatched_movies.append(movie)
 
-    # Save updated cache
+    # Save updated caches
     if not dry_run:
         save_film_id_cache(cache)
+        if len(film_page_cache) != film_page_cache_size:
+            save_letterboxd_film_cache(film_page_cache)
 
     # Log summary
     total = len(local_movies)
