@@ -27,7 +27,8 @@ from media_backup.letterboxd_ids import enrich_films_with_ids
 from media_backup.ratings import enrich_films_with_ratings
 
 LETTERBOXD_BASE = "https://letterboxd.com"
-CACHE_MAX_AGE_HOURS = 24 * 30 * 6  # 6 months
+WATCHED_CACHE_MAX_AGE_HOURS = 24 * 30 * 6  # 6 months - watched history changes rarely
+WATCHLIST_CACHE_MAX_AGE_HOURS = 0  # Always fetch fresh - watchlist changes frequently
 
 
 def get_file_age_hours(path: Path) -> float | None:
@@ -39,7 +40,7 @@ def get_file_age_hours(path: Path) -> float | None:
     return age.total_seconds() / 3600
 
 
-def is_cache_valid(path: Path, max_age_hours: float = CACHE_MAX_AGE_HOURS) -> bool:
+def is_cache_valid(path: Path, max_age_hours: float) -> bool:
     """Check if cached file is still valid."""
     age = get_file_age_hours(path)
     if age is None:
@@ -172,41 +173,23 @@ def scrape_user(
     watched_path = data_dir / f"{username}_watched.json"
     watchlist_path = data_dir / f"{username}_watchlist.json"
 
-    # Check cache
-    watched_valid = is_cache_valid(watched_path)
-    watchlist_valid = is_cache_valid(watchlist_path)
+    # Check cache separately for watched (long cache) vs watchlist (always fresh)
+    watched_valid = is_cache_valid(watched_path, WATCHED_CACHE_MAX_AGE_HOURS)
 
-    if not force and watched_valid and watchlist_valid:
-        watched_age = get_file_age_hours(watched_path)
-        print(f"  Using cached data ({watched_age:.1f}h old)", file=sys.stderr)
-        with open(watched_path) as f:
-            watched = json.load(f)
-        with open(watchlist_path) as f:
-            watchlist = json.load(f)
-
-        # Still enrich with ratings if requested
-        if with_ratings:
-            # First get IMDB/TMDB IDs from Letterboxd pages (more reliable than title search)
-            print("  Enriching with IMDB/TMDB IDs...", file=sys.stderr)
-            enrich_films_with_ids(watched + watchlist)
-
-            print("  Enriching watched films with ratings...", file=sys.stderr)
-            watched = enrich_films_with_ratings(watched)
-            write_json(watched_path, watched)
-
-            print("  Enriching watchlist with ratings...", file=sys.stderr)
-            watchlist = enrich_films_with_ratings(watchlist)
-            write_json(watchlist_path, watchlist)
-
-        return watched, watchlist
-
-    # Scrape fresh data
     session = create_session()
 
-    print("  Scraping watched films...", file=sys.stderr)
-    watched = scrape_films(session, username, build_films_url, delay, max_pages)
-    print(f"  Found {len(watched)} watched films", file=sys.stderr)
+    # Watched films: use cache if valid
+    if not force and watched_valid:
+        watched_age = get_file_age_hours(watched_path)
+        print(f"  Using cached watched data ({watched_age:.1f}h old)", file=sys.stderr)
+        with open(watched_path) as f:
+            watched = json.load(f)
+    else:
+        print("  Scraping watched films...", file=sys.stderr)
+        watched = scrape_films(session, username, build_films_url, delay, max_pages)
+        print(f"  Found {len(watched)} watched films", file=sys.stderr)
 
+    # Watchlist: always fetch fresh (changes frequently)
     print("  Scraping watchlist...", file=sys.stderr)
     watchlist = scrape_films(session, username, build_watchlist_url, delay, max_pages)
     print(f"  Found {len(watchlist)} watchlist films", file=sys.stderr)
