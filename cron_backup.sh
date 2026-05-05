@@ -9,6 +9,9 @@
 
 set -e
 
+# Add common bin directories to PATH for cron environment
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="$REPO_DIR/data"
 
