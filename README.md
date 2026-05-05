@@ -1,8 +1,13 @@
 # MovieNight
 
-Sync your Letterboxd watchlist with your local media library. See what's ready to watch, what's missing, and find forgotten films you already own.
+Sync your Letterboxd watchlist with your local media library. See what's ready
+to watch, what's missing, and find forgotten films you already own.
 
-> **Deployed in the homelab**: runs as a daily cron job on `mediaserver`, scanning the local media library and writing reports under `data/reports/`. Cross-cutting infra docs live in [`homelab-infra`](https://github.com/joshlebed/homelab-infra). The project is also generally distributable — it doesn't depend on the homelab specifically.
+> **Deployed in the homelab**: runs as a daily cron job on `mediaserver`,
+> scanning the local media library and writing reports under `data/reports/`.
+> Cross-cutting infra docs live in
+> [`homelab-infra`](https://github.com/joshlebed/homelab-infra). The project is
+> also generally distributable — it doesn't depend on the homelab specifically.
 
 **What it does:**
 
@@ -11,7 +16,9 @@ Sync your Letterboxd watchlist with your local media library. See what's ready t
 - Surfaces unwatched films you've forgotten about
 - Generates shared lists for movie night with friends
 
-**How it works:** Your data lives in a separate `data/` directory that can be its own private git repo—giving you version history, easy restore on new machines, and automated daily backups via cron.
+**How it works:** Your data lives in a separate `data/` directory that can be
+its own private git repo—giving you version history, easy restore on new
+machines, and automated daily backups via cron.
 
 ## Prerequisites
 
@@ -62,7 +69,8 @@ make install-cron   # Install daily cron job (7am)
 make uninstall-cron # Remove cron job
 ```
 
-The cron commands are idempotent - run `make install-cron` again anytime to update the schedule.
+The cron commands are idempotent - run `make install-cron` again anytime to
+update the schedule.
 
 ## Advanced
 
@@ -82,7 +90,8 @@ Edit `data/config.json` directly:
 }
 ```
 
-The `torrents` directory is optional - if set, generates magnet links from `.torrent` files.
+The `torrents` directory is optional - if set, generates magnet links from
+`.torrent` files.
 
 </details>
 
@@ -106,7 +115,8 @@ data/
 <details>
 <summary>Private backup repo</summary>
 
-The `data/` directory is gitignored. The setup wizard can configure it as a separate private repo, or do it manually:
+The `data/` directory is gitignored. The setup wizard can configure it as a
+separate private repo, or do it manually:
 
 ```bash
 cd data
