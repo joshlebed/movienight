@@ -3,6 +3,7 @@ data/
 
 # Logs
 cron.log
+cron-refresh.log
 
 # Python
 __pycache__/

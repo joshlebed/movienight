@@ -17,6 +17,13 @@ DATA_DIR="$REPO_DIR/data"
 
 cd "$REPO_DIR"
 
+# Serialize against the */5 hook-driven refresh in cron_refresh_on_flag.sh —
+# both write data/cache/media_library.json and data/reports/*.md, and
+# concurrent runs would interleave. We wait (the daily run is more important
+# than skipping a poll); the poller does -n and skips if we hold the lock.
+exec 9>/tmp/movienight-refresh.lock
+flock -w 600 9 || { echo "ERROR: failed to acquire /tmp/movienight-refresh.lock after 600s"; exit 1; }
+
 echo "=== Media Library Backup - $(date) ==="
 
 if [ ! -d "$DATA_DIR" ]; then

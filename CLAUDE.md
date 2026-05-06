@@ -16,10 +16,25 @@ anyone running it. Homelab-specific deployment notes are below.
 
 ## deployed on
 
-`mediaserver`. The Letterboxd scrape + library scan + report generation runs as
-a **daily cron job at 7 AM**, installed via `make install-cron`. Reports land in
-`data/reports/` and are read by humans (no downstream automation depends on
-them).
+`mediaserver`. Two cron jobs, both idempotent:
+
+- **Daily 7 AM** (`make install-cron`) — full backup: Letterboxd scrape, local
+  scan, report generation. `cron_backup.sh`. Logs to `cron.log`.
+- **Every 5 min** (`make install-refresh-cron`) — picks up the qBit
+  torrent-finished hook flag at
+  `/home/joshlebed/code/qbittorrent-vpn/config/movienight-refresh-pending`. If
+  present, runs `snapshot + unwatched` (no Letterboxd scrape) and clears the
+  flag. `cron_refresh_on_flag.sh`. Logs to `cron-refresh.log`.
+
+Reports land in `data/reports/` and are read by humans (no downstream
+automation depends on them).
+
+The two jobs share a flock (`/tmp/movienight-refresh.lock`) so they can't
+race on writes to `data/cache/media_library.json` or the report files. The
+poller skips if the daily run holds the lock; the daily run waits up to 600s
+for the poller. Setup recipe + verification:
+`homelab-infra/docs/cookbook.md` under "wire qBittorrent → movienight
+refresh".
 
 ## data directory
 

@@ -6,16 +6,21 @@
 #
 # The backup uses 6-month caching for Letterboxd data. Use `make backup-force` to bypass.
 
-.PHONY: setup backup backup-force install-cron uninstall-cron lint format clean clear-letterboxd-user-data help
+.PHONY: setup backup backup-local backup-force install-cron uninstall-cron \
+        install-refresh-cron uninstall-refresh-cron lint format clean \
+        clear-letterboxd-user-data help
 
 help:
-	@echo "make setup         Interactive setup wizard"
-	@echo "make backup        Run backup (uses 6-month cache)"
-	@echo "make backup-force  Force fresh Letterboxd scrape"
-	@echo "make install-cron  Install daily cron job (7am)"
-	@echo "make uninstall-cron Remove cron job"
-	@echo "make lint          Run linter"
-	@echo "make format        Format code"
+	@echo "make setup                 Interactive setup wizard"
+	@echo "make backup                Run full backup (Letterboxd + snapshot + reports)"
+	@echo "make backup-local          Refresh local snapshot + reports only (skip Letterboxd)"
+	@echo "make backup-force          Force fresh Letterboxd scrape"
+	@echo "make install-cron          Install daily backup cron (7am)"
+	@echo "make uninstall-cron        Remove daily backup cron"
+	@echo "make install-refresh-cron  Install */5 hook-poll cron (qBit→movienight refresh)"
+	@echo "make uninstall-refresh-cron  Remove */5 hook-poll cron"
+	@echo "make lint                  Run linter"
+	@echo "make format                Format code"
 	@echo "make clear-letterboxd-user-data  Clear cached watchlist/watched data for all users"
 
 setup:
@@ -25,6 +30,11 @@ setup:
 
 backup:
 	./cron_backup.sh
+
+# Refresh the local snapshot and reports without touching Letterboxd. Locked
+# against cron_backup.sh so the daily 7 AM run can't race with this.
+backup-local:
+	flock -w 600 /tmp/movienight-refresh.lock sh -c 'uv run snapshot && uv run unwatched'
 
 backup-force:
 	uv run letterboxd --ratings --force
@@ -48,6 +58,24 @@ install-cron:
 uninstall-cron:
 	@crontab -l 2>/dev/null | grep -v "$(CRON_MARKER)" | crontab - || true
 	@echo "Cron job removed"
+
+# Refresh-poll cron — picks up the qBit torrent-finished hook flag every 5 min
+# and runs snapshot+unwatched. Idempotent (re-running this updates the entry).
+REFRESH_CRON_MARKER := mediarefresh-$(shell pwd | md5sum | cut -c1-8)
+REFRESH_CRON_SCHEDULE := */5 * * * *
+REFRESH_CRON_CMD := $(CURDIR)/cron_refresh_on_flag.sh
+
+install-refresh-cron:
+	@( crontab -l 2>/dev/null | grep -v "$(REFRESH_CRON_MARKER)" ; \
+	   echo "$(REFRESH_CRON_SCHEDULE) $(REFRESH_CRON_CMD) # $(REFRESH_CRON_MARKER)" ) | crontab -
+	@echo "Refresh-poll cron installed: $(REFRESH_CRON_SCHEDULE)"
+	@echo "  $(REFRESH_CRON_CMD)"
+	@echo ""
+	@echo "View with: crontab -l | grep $(REFRESH_CRON_MARKER)"
+
+uninstall-refresh-cron:
+	@crontab -l 2>/dev/null | grep -v "$(REFRESH_CRON_MARKER)" | crontab - || true
+	@echo "Refresh-poll cron removed"
 
 lint:
 	uv run ruff check src/
