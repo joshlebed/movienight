@@ -19,7 +19,11 @@ anyone running it. Homelab-specific deployment notes are below.
 `mediaserver`. Two cron jobs, both idempotent:
 
 - **Daily 7 AM** (`make install-cron`) — full backup: Letterboxd scrape, local
-  scan, report generation. `cron_backup.sh`. Logs to `cron.log`.
+  scan, report generation. `cron_backup.sh`. Logs to `cron.log`. After the
+  data-repo commit, `scripts/post_discord_digest.py` posts a per-user
+  watchlist-additions embed to Discord (same webhook media-stack uses;
+  read from `media-stack/.env`). Best-effort — failure doesn't fail the
+  cron. No-op on days with zero additions.
 - **Every 5 min** (`make install-refresh-cron`) — picks up the qBit
   torrent-finished hook flag at
   `/home/joshlebed/code/qbittorrent-vpn/config/movienight-refresh-pending`. If
