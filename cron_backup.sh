@@ -6,6 +6,8 @@
 # 2. Scans local media directories
 # 3. Generates per-user filtered lists
 # 4. Commits and pushes changes to the data repo
+# 5. Posts a Discord digest of per-user watchlist additions since the
+#    previous run (best-effort)
 
 set -e
 
@@ -69,6 +71,20 @@ else
     else
         echo "No remote configured, skipping push"
     fi
+fi
+
+# Step 5: Post Discord digest of watchlist additions since the last run.
+# Compares HEAD~1 (yesterday's commit, post-step-4) to HEAD and posts a
+# single embed listing per-user additions. Reads DISCORD_WEBHOOK_URL from
+# media-stack/.env. Best-effort — failure here doesn't fail the cron.
+echo ""
+echo "--- Posting Discord digest ---"
+PREV_COMMIT=$(git log --skip=1 -n 1 --format='%H' 2>/dev/null || true)
+if [ -n "$PREV_COMMIT" ]; then
+    "$REPO_DIR/scripts/post_discord_digest.py" "$PREV_COMMIT" "HEAD" || \
+        echo "(digest post failed; continuing)"
+else
+    echo "(no previous commit yet — skipping first-run digest)"
 fi
 
 echo ""
