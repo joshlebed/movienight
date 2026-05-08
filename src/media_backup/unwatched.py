@@ -2,14 +2,17 @@
 """
 Generate unified markdown reports comparing local media against Letterboxd data.
 
-Per-user output (reports/{user}.md):
+Per-user output (reports/solo/{user}.md):
 - Watchlist available locally
 - Watchlist not available locally
 - Library unwatched (local films not watched, not on watchlist)
 
-Pairwise output (reports/shared_{user1}_{user2}.md):
+Pairwise output (reports/shared/{user1}_{user2}.md, alphabetically sorted):
 - Shared watchlist available locally
 - Shared watchlist not available locally
+
+Library output (reports/library.md):
+- Every film in the library, sorted by Letterboxd rating
 """
 
 from __future__ import annotations

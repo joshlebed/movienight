@@ -55,10 +55,14 @@ make setup      # Choose "Restore from existing backup repo"
 
 After running `make backup`, you'll find markdown reports in `data/reports/`:
 
-| Report                      | What it shows                                                              |
-| --------------------------- | -------------------------------------------------------------------------- |
-| `{user}.md`                 | Your watchlist (available + missing), plus unwatched films in your library |
-| `shared_{user1}_{user2}.md` | Films both users want to watch (great for movie night)                     |
+| Report                          | What it shows                                                              |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `solo/{user}.md`                | Your watchlist (available + missing), plus unwatched films in your library |
+| `shared/{user1}_{user2}.md`     | Films both users want to watch (great for movie night)                     |
+| `library.md`                    | Every film in your library, sorted by Letterboxd rating                    |
+
+The `shared/` filename uses alphabetically-sorted usernames joined with `_`
+(e.g. `shared/alice_bob.md`).
 
 ## Commands
 
@@ -106,8 +110,11 @@ data/
 │   ├── media_library.json   # Local media scan
 │   └── ratings_cache.json   # Film ratings
 └── reports/                 # Human-readable output
-    ├── {user}.md
-    └── shared_{user1}_{user2}.md
+    ├── library.md           # Whole library, sorted by Letterboxd rating
+    ├── solo/
+    │   └── {user}.md
+    └── shared/
+        └── {user1}_{user2}.md
 ```
 
 </details>
