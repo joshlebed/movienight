@@ -8,9 +8,10 @@
 
 .PHONY: setup backup backup-local backup-force install-cron uninstall-cron \
         install-refresh-cron uninstall-refresh-cron lint format clean \
-        clear-letterboxd-user-data help
+        clear-letterboxd-user-data help deploy
 
 help:
+	@echo "make deploy                Push + ssh-pull on mediaserver (laptop-side)"
 	@echo "make setup                 Interactive setup wizard"
 	@echo "make backup                Run full backup (Letterboxd + snapshot + reports)"
 	@echo "make backup-local          Refresh local snapshot + reports only (skip Letterboxd)"
@@ -89,3 +90,14 @@ clean:
 clear-letterboxd-user-data:
 	rm -f data/cache/letterboxd/*.json
 	@echo "Cleared watchlist/watched cache for all users"
+
+# Publish — laptop-side. The actual service is a cron, so there's nothing
+# to restart; the next 7 AM run (or `make backup` on mediaserver) picks up
+# whatever was pulled. Standard verb across the homelab; see
+# homelab-infra/docs/agent-onboarding.md.
+deploy:
+	@echo "→ git push origin main"
+	git push origin main
+	@echo "→ ssh mediaserver: pull"
+	ssh mediaserver "cd /home/joshlebed/code/movienight && git pull --rebase origin main"
+	@echo "(no service restart — next 7 AM cron picks up the new code)"
