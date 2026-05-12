@@ -33,7 +33,7 @@ from media_backup.config import (
     get_solo_reports_dir,
     load_config,
 )
-from media_backup.film_matcher import match_local_films
+from media_backup.film_matcher import load_manual_overrides, match_local_films
 from media_backup.letterboxd_ids import enrich_films_with_ids
 from media_backup.ratings import enrich_films_with_ratings
 
@@ -171,10 +171,21 @@ def get_local_movies(cache_dir: Path) -> tuple[list[dict], dict[str, dict]]:
     """
     media_path = cache_dir / "media_library.json"
     media = load_json(media_path)
+
+    # TV folders listed in manual_overrides.json are treated as films too.
+    # Covers Letterboxd-as-film / IMDb-as-miniseries cases (e.g. Over the
+    # Garden Wall) without risking fuzzy false positives on regular shows.
+    override_folders = set(load_manual_overrides().keys())
+
     movies = [
         item
         for item in media
-        if item.get("type") == "movie" and not item.get("error") and item.get("title")
+        if not item.get("error")
+        and item.get("title")
+        and (
+            item.get("type") == "movie"
+            or (item.get("type") == "tv" and item.get("folder") in override_folders)
+        )
     ]
 
     # Build ratings lookup and collect all Letterboxd films from cache files

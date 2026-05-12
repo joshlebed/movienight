@@ -570,6 +570,21 @@ def match_local_films(
             movie["match_method"] = match.get("match_method")
             movie["match_score"] = match.get("match_score")
 
+            # Manual overrides assert a canonical Letterboxd identity — pull
+            # title/year from there so downstream fuzzy checks (library
+            # categorization, display) use the show name, not whatever
+            # ffprobe pulled from the largest .mkv (often an episode title
+            # for TV-as-film entries).
+            if match.get("match_method") == "manual_override":
+                slug = match.get("letterboxd_slug")
+                for film in letterboxd_films:
+                    if film.get("film_slug") == slug:
+                        if film.get("title"):
+                            movie["title"] = film["title"]
+                        if film.get("year"):
+                            movie["year"] = film["year"]
+                        break
+
             # Update cache
             cache[folder] = match
             matched_count += 1
