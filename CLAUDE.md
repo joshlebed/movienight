@@ -3,12 +3,12 @@ read @README.md for high level context on the repo.
 # agent notes for movienight
 
 Cross-cutting infra docs (network, hosts, dev workflow, safety rails) live in
-the sibling [`homelab-infra`](https://github.com/joshlebed/homelab-infra) repo.
-If `~/code/homelab-infra` (or `/home/joshlebed/code/homelab-infra` on
+the sibling [`homelab`](https://github.com/joshlebed/homelab) repo.
+If `~/code/homelab` (or `/home/joshlebed/code/homelab` on
 mediaserver) doesn't exist, clone it:
 
 ```bash
-git clone git@github.com:joshlebed/homelab-infra.git ../homelab-infra
+git clone git@github.com:joshlebed/homelab.git ../homelab
 ```
 
 This project is also generally distributable — most of the README applies to
@@ -37,7 +37,7 @@ The two jobs share a flock (`/tmp/movienight-refresh.lock`) so they can't
 race on writes to `data/cache/media_library.json` or the report files. The
 poller skips if the daily run holds the lock; the daily run waits up to 600s
 for the poller. Setup recipe + verification:
-`homelab-infra/docs/cookbook.md` under "wire qBittorrent → movienight
+`homelab/docs/cookbook.md` under "wire qBittorrent → movienight
 refresh".
 
 ## data directory

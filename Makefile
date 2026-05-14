@@ -94,7 +94,7 @@ clear-letterboxd-user-data:
 # Publish — laptop-side. The actual service is a cron, so there's nothing
 # to restart; the next 7 AM run (or `make backup` on mediaserver) picks up
 # whatever was pulled. Standard verb across the homelab; see
-# homelab-infra/docs/agent-onboarding.md.
+# homelab/docs/agent-onboarding.md.
 deploy:
 	@echo "→ git push origin main"
 	git push origin main

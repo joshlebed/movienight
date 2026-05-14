@@ -6,7 +6,7 @@ to watch, what's missing, and find forgotten films you already own.
 > **Deployed in the homelab**: runs as a daily cron job on `mediaserver`,
 > scanning the local media library and writing reports under `data/reports/`.
 > Cross-cutting infra docs live in
-> [`homelab-infra`](https://github.com/joshlebed/homelab-infra). The project is
+> [`homelab`](https://github.com/joshlebed/homelab). The project is
 > also generally distributable — it doesn't depend on the homelab specifically.
 
 **What it does:**
