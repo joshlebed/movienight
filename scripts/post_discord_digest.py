@@ -7,8 +7,8 @@ the previous run's commit and the current one. Diffs the per-user
 watchlist JSONs between them and posts a single Discord embed listing
 additions per user.
 
-Reads the Discord webhook URL from media-stack's .env (same channel the
-discord-progress shim posts to).
+Reads the Discord webhook URL from media-stack's .env (same channel
+Seerr's lifecycle webhook posts to).
 
 Usage:
   post_discord_digest.py <prev_commit> <current_commit>

@@ -8,7 +8,7 @@
 
 .PHONY: setup backup backup-local backup-force install-cron uninstall-cron \
         install-refresh-cron uninstall-refresh-cron lint format clean \
-        clear-letterboxd-user-data help deploy
+        clear-letterboxd-user-data help deploy check
 
 help:
 	@echo "make deploy                Push + ssh-pull on mediaserver (laptop-side)"
@@ -22,6 +22,7 @@ help:
 	@echo "make uninstall-refresh-cron  Remove */5 hook-poll cron"
 	@echo "make lint                  Run linter"
 	@echo "make format                Format code"
+	@echo "make check                 Fast local validators (delegates to homelab)"
 	@echo "make clear-letterboxd-user-data  Clear cached watchlist/watched data for all users"
 
 setup:
@@ -94,10 +95,15 @@ clear-letterboxd-user-data:
 # Publish — laptop-side. The actual service is a cron, so there's nothing
 # to restart; the next 7 AM run (or `make backup` on mediaserver) picks up
 # whatever was pulled. Standard verb across the homelab; see
-# homelab/docs/agent-onboarding.md.
+# homelab/CLAUDE.md.
 deploy:
 	@echo "→ git push origin main"
 	git push origin main
 	@echo "→ ssh mediaserver: pull"
 	ssh mediaserver "cd /home/joshlebed/code/movienight && git pull --rebase origin main"
 	@echo "(no service restart — next 7 AM cron picks up the new code)"
+
+# Fast local validators (compose / py / sh syntax). Delegates to homelab's
+# check.sh — single source of truth across child repos.
+check:
+	@../homelab/scripts/check.sh "$(PWD)"
